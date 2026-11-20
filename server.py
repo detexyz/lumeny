@@ -11,6 +11,7 @@ BET_TIME, SPIN_TIME, START_BAL, MIN_BAL, EARN_MAX = 15, 6.5, 100, 10, 38
 rng = random.SystemRandom()
 users = json.load(open(DB)) if os.path.exists(DB) else {}
 conns, rooms = {}, {}
+BOT_NAMES = ["Лиса", "Комета", "Нокс", "Мира", "Тень", "Орион", "Зира", "Бублик", "Вега", "Рекс"]
 
 
 def save():
@@ -41,6 +42,7 @@ async def push(uid):
 class Room:
     def __init__(s):
         s.clients, s.bets, s.phase, s.left, s.task = {}, {}, "idle", 0, None
+        s.bots_on, s.bot_task = True, None
 
     async def bc(s, m):
         data = json.dumps(m)
@@ -51,8 +53,30 @@ class Room:
                 pass
 
     def state(s):
-        return {"t": "state", "phase": s.phase, "left": s.left,
-                "players": [{"id": u, "name": users[u]["name"], "bet": b} for u, b in s.bets.items()]}
+        nm = lambda u: users[u]["name"] if u in users else u[4:]
+        return {"t": "state", "phase": s.phase, "left": s.left, "bots": s.bots_on,
+                "players": [{"id": u, "name": nm(u), "bet": b} for u, b in s.bets.items()]}
+
+    def add_bot(s, name):
+        humans = [b for u, b in s.bets.items() if not u.startswith("bot:")]
+        ref = max(humans) if humans else 50
+        s.bets["bot:" + name] = max(10, int(ref * rng.uniform(.5, 1.5)))
+
+    async def fill_bots(s):
+        await asyncio.sleep(2)
+        if s.phase == "idle" and s.bots_on and len(s.bets) < 2 and not s.task:
+            names = rng.sample(BOT_NAMES, 3)
+            for n in names[:2]:
+                s.add_bot(n)
+            s.task = asyncio.create_task(s.run())
+            asyncio.create_task(s.late_bot(names[2]))
+        s.bot_task = None
+
+    async def late_bot(s, name):
+        await asyncio.sleep(rng.uniform(3, 9))
+        if s.phase == "bet":
+            s.add_bot(name)
+            await s.bc(s.state())
 
     async def run(s):
         s.phase, s.left = "bet", BET_TIME
@@ -73,11 +97,14 @@ class Room:
         target = 2 * math.pi * (start + s.bets[win] * rng.uniform(.1, .9)) / pot
         await s.bc({"t": "spin", "winner": win, "pot": pot, "target": target})
         await asyncio.sleep(SPIN_TIME)
-        users[win]["bal"] += pot
+        if win in users:
+            users[win]["bal"] += pot
         for u in ids:
-            users[u]["bal"] = max(users[u]["bal"], MIN_BAL)
+            if u in users:
+                users[u]["bal"] = max(users[u]["bal"], MIN_BAL)
         save()
-        await s.bc({"t": "result", "winner": win, "name": users[win]["name"], "pot": pot})
+        wname = users[win]["name"] if win in users else win[4:]
+        await s.bc({"t": "result", "winner": win, "name": wname, "pot": pot})
         for u in ids:
             await push(u)
         s.bets = {}
@@ -125,8 +152,14 @@ async def ws_handler(req):
                     await push(uid)
                     if room.phase == "idle" and len(room.bets) >= 2 and not room.task:
                         room.task = asyncio.create_task(room.run())
+                    elif room.phase == "idle" and room.bots_on and not room.bot_task:
+                        room.bot_task = asyncio.create_task(room.fill_bots())
+                        await room.bc(room.state())
                     else:
                         await room.bc(room.state())
+            elif t == "bots":
+                room.bots_on = bool(m.get("on"))
+                await room.bc(room.state())
             elif t == "earn_start":
                 rec["start"] = time.time()
             elif t == "earn_end":
