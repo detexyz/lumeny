@@ -57,8 +57,9 @@ canvas{width:100%;height:100%;display:block}
   <div class="bet"><input id="amt" type="number" inputmode="numeric" min="1" value="10"><button class="go" id="place">Поставить</button></div>
   <div class="chips"><button data-a="10">10</button><button data-a="50">50</button><button data-a="100">100</button><button data-a="all">Всё</button></div>
   <div id="players"></div>
+  <button class="chips-btn" id="bots" style="width:100%;margin:0 0 8px;padding:10px;border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:12px;font:inherit">Боты: вкл</button>
   <button class="go big" id="share" style="background:var(--ember)">Позвать друзей</button>
-  <p class="hint">Чем больше ставка, тем шире ваш сектор. Раунд стартует, когда ставки сделали двое. Победитель забирает весь банк.</p>
+  <p class="hint">Чем больше ставка, тем шире ваш сектор. Раунд стартует, когда ставки сделали двое; если вы один, подключатся боты. Победитель забирает весь банк.</p>
 </section>
 <section id="earn">
   <div class="hud"><span>Время: <span id="t">20</span></span><span>Лумены: <span id="score">0</span></span></div>
@@ -90,7 +91,7 @@ const COLORS=['#ff7a3d','#4de8b0','#7aa2ff','#ffd24d','#d98cff','#ff5d73','#5fd4
 const cv=$('wheel'),ctx=cv.getContext('2d');
 const S=600;cv.width=cv.height=S;
 const TOTAL=15;
-let players=[],rot=0,phase='idle',left=0,spinning=false,botName='',ws;
+let botsOn=true,players=[],rot=0,phase='idle',left=0,spinning=false,botName='',ws;
 const roomId=(new URLSearchParams(location.search).get('room')||(tg&&tg.initDataUnsafe&&tg.initDataUnsafe.start_param)||('r'+(user.id||'guest'))).replace(/\W/g,'');
 function send(m){if(ws&&ws.readyState===1)ws.send(JSON.stringify(m))}
 function connect(){
@@ -101,7 +102,7 @@ function connect(){
 }
 function handle(m){
   if(m.t==='me'){setBal(m.balance);myId=String(m.id);if(m.bot)botName=m.bot}
-  else if(m.t==='state'&&!spinning){players=m.players;phase=m.phase;left=m.left;list();status()}
+  else if(m.t==='state'&&!spinning){players=m.players;phase=m.phase;left=m.left;botsOn=m.bots!==false;$('bots').textContent='Боты: '+(botsOn?'вкл':'выкл');list();status()}
   else if(m.t==='spin'){spinning=true;phase='spin';spin(m)}
   else if(m.t==='result'){showResult(m)}
   else if(m.t==='err'){$('status').className='status lose';$('status').textContent=m.msg}
@@ -109,7 +110,7 @@ function handle(m){
 function status(){
   const s=$('status');s.className='status';
   if(phase==='bet')s.textContent='Ставки до броска: '+Math.ceil(left)+' с';
-  else if(phase==='idle')s.textContent=players.length<2?'Ждём ставки от двух игроков':'Готовимся…';
+  else if(phase==='idle')s.textContent=players.length<2?(botsOn?'Сделайте ставку: подключатся боты':'Ждём ставки от двух игроков'):'Готовимся…';
   $('timer').style.width=(phase==='bet'?left/TOTAL*100:0)+'%';
 }
 setInterval(()=>{if(phase==='bet'&&left>0&&!spinning){left=Math.max(0,left-.25);status()}},250);
@@ -161,6 +162,7 @@ function bet(){
   send({t:'bet',amount:a});try{tg&&tg.HapticFeedback.impactOccurred('light')}catch(e){}
 }
 $('place').onclick=bet;
+$('bots').onclick=()=>send({t:'bots',on:!botsOn});
 document.querySelectorAll('.chips button').forEach(b=>b.onclick=()=>{$('amt').value=b.dataset.a==='all'?bal:b.dataset.a});
 $('share').onclick=()=>{
   const link='https://t.me/'+botName+'?start='+roomId;
