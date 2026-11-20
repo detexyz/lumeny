@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Лумены</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{--bg:#15101f;--card:#221a33;--line:#352a4d;--ink:#f3eefc;--dim:#9c90b8;--ember:#ff7a3d;--mint:#4de8b0;--red:#ff5d73}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:16px/1.4 -apple-system,"Segoe UI",Roboto,sans-serif;overscroll-behavior:none}
+body{padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);display:flex;flex-direction:column;max-width:480px;margin:0 auto}
+header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px}
+.me{color:var(--dim);font-size:14px}
+.bal{font-size:22px;font-weight:800;color:var(--ember);font-variant-numeric:tabular-nums}
+nav{display:flex;gap:8px;padding:0 16px 8px}
+nav button{flex:1;padding:10px;border:1px solid var(--line);background:transparent;color:var(--dim);border-radius:12px;font:inherit;font-weight:600}
+nav button.on{background:var(--ember);border-color:var(--ember);color:#1b0f08}
+main{flex:1;overflow-y:auto;padding:0 16px 24px}
+section{display:none}section.on{display:block}
+.stage{position:relative;width:min(300px,80vw);margin:6px auto 0;aspect-ratio:1}
+canvas{width:100%;height:100%;display:block}
+.status{text-align:center;margin:10px 0 4px;font-weight:700;min-height:26px}
+.status.win{color:var(--mint)}.status.lose{color:var(--red)}
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin:0 0 12px}
+.bar i{display:block;height:100%;width:100%;background:var(--ember);transition:width .25s linear}
+.bet{display:flex;gap:8px}
+.bet input{flex:1;min-width:0;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--ink);font:inherit;font-size:18px;font-weight:700}
+.go{padding:12px 20px;border:0;border-radius:12px;background:var(--mint);color:#06281d;font:inherit;font-weight:800}
+.go:disabled{opacity:.35}
+.chips{display:flex;gap:8px;margin:8px 0 14px}
+.chips button{flex:1;padding:8px 0;border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:10px;font:inherit;font-size:14px}
+.row{display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--card);border-radius:12px;margin-bottom:6px}
+.row b{width:10px;height:10px;border-radius:50%;flex:none}
+.row span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row em{font-style:normal;color:var(--dim);font-variant-numeric:tabular-nums}
+.row.mine{outline:1px solid var(--ember)}
+.hint{color:var(--dim);font-size:13px;text-align:center;margin:10px 0}
+#arena{position:relative;height:380px;background:var(--card);border-radius:16px;overflow:hidden;touch-action:manipulation;user-select:none}
+.drop{position:absolute;top:-50px;font-size:36px;animation:fall linear forwards;padding:6px}
+@keyframes fall{to{transform:translateY(450px)}}
+.hud{display:flex;justify-content:space-between;font-weight:700;margin:0 0 10px}
+.big{display:block;width:100%;margin-top:12px;padding:14px}
+.over{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;background:rgba(21,16,31,.85)}
+.over h2{margin:0;font-size:28px;color:var(--ember)}
+@media(prefers-reduced-motion:reduce){.bar i{transition:none}}
+</style>
+</head>
+<body>
+<header><div class="me" id="name">Игрок</div><div class="bal">✦ <span id="bal">0</span></div></header>
+<nav><button class="on" data-t="roul">Рулетка</button><button data-t="earn">Ловец света</button></nav>
+<main>
+<section id="roul" class="on">
+  <div class="stage"><canvas id="wheel"></canvas></div>
+  <div class="status" id="status"></div>
+  <div class="bar"><i id="timer"></i></div>
+  <div class="bet"><input id="amt" type="number" inputmode="numeric" min="1" value="10"><button class="go" id="place">Поставить</button></div>
+  <div class="chips"><button data-a="10">10</button><button data-a="50">50</button><button data-a="100">100</button><button data-a="all">Всё</button></div>
+  <div id="players"></div>
+  <button class="go big" id="share" style="background:var(--ember)">Позвать друзей</button>
+  <p class="hint">Чем больше ставка, тем шире ваш сектор. Раунд стартует, когда ставки сделали двое. Победитель забирает весь банк.</p>
+</section>
+<section id="earn">
+  <div class="hud"><span>Время: <span id="t">20</span></span><span>Лумены: <span id="score">0</span></span></div>
+  <div id="arena"><div class="over" id="intro"><h2>Ловец света</h2><div>Лови ✨ и получай лумены.<br>Бомбы 💣 отнимают 3.</div></div></div>
+  <button class="go big" id="start">Играть</button>
+  <p class="hint">Заработанные лумены сразу идут на баланс для рулетки.</p>
+</section>
+</main>
+<script>
+const tg=window.Telegram&&Telegram.WebApp;
+if(tg){try{tg.ready();tg.expand();tg.setHeaderColor('#15101f');tg.setBackgroundColor('#15101f')}catch(e){}}
+const buzz=t=>{try{tg&&tg.HapticFeedback&&tg.HapticFeedback.notificationOccurred(t)}catch(e){}};
+const $=id=>document.getElementById(id);
+const user=(tg&&tg.initDataUnsafe&&tg.initDataUnsafe.user)||{};
+const MY=user.first_name||'Вы';
+$('name').textContent=MY;
+
+let bal=0,myId='';
+function setBal(v){bal=Math.max(0,Math.floor(v));$('bal').textContent=bal}
+
+/* вкладки */
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x===b));
+  document.querySelectorAll('section').forEach(s=>s.classList.toggle('on',s.id===b.dataset.t));
+});
+
+/* ---------- РУЛЕТКА (онлайн) ---------- */
+const COLORS=['#ff7a3d','#4de8b0','#7aa2ff','#ffd24d','#d98cff','#ff5d73','#5fd4ff','#b6e84d'];
+const cv=$('wheel'),ctx=cv.getContext('2d');
+const S=600;cv.width=cv.height=S;
+const TOTAL=15;
+let players=[],rot=0,phase='idle',left=0,spinning=false,botName='',ws;
+const roomId=(new URLSearchParams(location.search).get('room')||(tg&&tg.initDataUnsafe&&tg.initDataUnsafe.start_param)||('r'+(user.id||'guest'))).replace(/\W/g,'');
+function send(m){if(ws&&ws.readyState===1)ws.send(JSON.stringify(m))}
+function connect(){
+  const p=new URLSearchParams({room:roomId,initData:(tg&&tg.initData)||'',name:MY,id:user.id||('g'+Math.floor(Math.random()*1e6))});
+  ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws?'+p);
+  ws.onclose=()=>{$('status').textContent='Нет связи, подключаемся…';setTimeout(connect,2000)};
+  ws.onmessage=e=>handle(JSON.parse(e.data));
+}
+function handle(m){
+  if(m.t==='me'){setBal(m.balance);myId=String(m.id);if(m.bot)botName=m.bot}
+  else if(m.t==='state'&&!spinning){players=m.players;phase=m.phase;left=m.left;list();status()}
+  else if(m.t==='spin'){spinning=true;phase='spin';spin(m)}
+  else if(m.t==='result'){showResult(m)}
+  else if(m.t==='err'){$('status').className='status lose';$('status').textContent=m.msg}
+}
+function status(){
+  const s=$('status');s.className='status';
+  if(phase==='bet')s.textContent='Ставки до броска: '+Math.ceil(left)+' с';
+  else if(phase==='idle')s.textContent=players.length<2?'Ждём ставки от двух игроков':'Готовимся…';
+  $('timer').style.width=(phase==='bet'?left/TOTAL*100:0)+'%';
+}
+setInterval(()=>{if(phase==='bet'&&left>0&&!spinning){left=Math.max(0,left-.25);status()}},250);
+function total(){return players.reduce((a,p)=>a+p.bet,0)}
+function draw(){
+  const c=S/2,R=S/2-24;ctx.clearRect(0,0,S,S);
+  const tot=total();let a=-Math.PI/2+rot;
+  if(!tot){ctx.beginPath();ctx.arc(c,c,R,0,7);ctx.lineWidth=40;ctx.strokeStyle='#352a4d';ctx.stroke()}
+  players.forEach((p,i)=>{
+    const w=p.bet/tot*Math.PI*2;
+    ctx.beginPath();ctx.moveTo(c,c);ctx.arc(c,c,R,a,a+w);ctx.closePath();
+    ctx.fillStyle=COLORS[i%COLORS.length];ctx.fill();ctx.lineWidth=3;ctx.strokeStyle='#15101f';ctx.stroke();
+    a+=w;
+  });
+  ctx.beginPath();ctx.arc(c,c,R*.42,0,7);ctx.fillStyle='#15101f';ctx.fill();
+  ctx.fillStyle='#f3eefc';ctx.textAlign='center';ctx.font='700 44px sans-serif';ctx.fillText('✦ '+tot,c,c+10);
+  ctx.fillStyle='#9c90b8';ctx.font='24px sans-serif';ctx.fillText('банк',c,c+42);
+  ctx.beginPath();ctx.arc(c,14,15,0,7);ctx.fillStyle='#fff';ctx.shadowColor='#000';ctx.shadowBlur=10;ctx.fill();ctx.shadowBlur=0;
+}
+function list(){
+  const tot=total();
+  $('players').innerHTML=players.map((p,i)=>({p,i})).sort((x,y)=>y.p.bet-x.p.bet).map(({p,i})=>
+    `<div class="row${p.id===myId?' mine':''}"><b style="background:${COLORS[i%COLORS.length]}"></b><span>${esc(p.name)}</span><em>✦ ${p.bet} · ${(p.bet/tot*100).toFixed(1)}%</em></div>`).join('');
+  draw();
+}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function spin(m){
+  $('place').disabled=true;$('timer').style.width='0%';$('status').className='status';$('status').textContent='Шарик катится…';
+  const from=rot,delta=((-m.target-from)%(Math.PI*2)+Math.PI*2)%(Math.PI*2)+Math.PI*2*6;
+  const t0=performance.now(),D=5500;
+  (function f(now){
+    const k=Math.min(1,(now-t0)/D),e=1-Math.pow(1-k,4);
+    rot=from+delta*e;draw();
+    if(k<1)requestAnimationFrame(f);
+  })(t0);
+}
+function showResult(m){
+  const s=$('status'),mine=players.some(p=>p.id===myId);
+  if(m.winner===myId){s.textContent='Вы выиграли ✦ '+m.pot+'!';s.className='status win';buzz('success')}
+  else{s.textContent='Выиграл '+m.name+' · ✦ '+m.pot;s.className='status'+(mine?' lose':'');if(mine)buzz('error')}
+  spinning=false;phase='end';
+  setTimeout(()=>{$('place').disabled=false},4000);
+}
+function bet(){
+  if(phase!=='idle'&&phase!=='bet')return;
+  const a=Math.floor(+$('amt').value);
+  if(!(a>0)){$('amt').focus();return}
+  if(a>bal){$('status').className='status lose';$('status').textContent='Не хватает люменов. Заработайте их в «Ловце света»';return}
+  send({t:'bet',amount:a});try{tg&&tg.HapticFeedback.impactOccurred('light')}catch(e){}
+}
+$('place').onclick=bet;
+document.querySelectorAll('.chips button').forEach(b=>b.onclick=()=>{$('amt').value=b.dataset.a==='all'?bal:b.dataset.a});
+$('share').onclick=()=>{
+  const link='https://t.me/'+botName+'?start='+roomId;
+  const u='https://t.me/share/url?url='+encodeURIComponent(link)+'&text='+encodeURIComponent('Заходи в рулетку, ставим лумены!');
+  tg?tg.openTelegramLink(u):window.open(u);
+};
+draw();connect();
+
+/* ---------- ЛОВЕЦ ИСКР ---------- */
+let playing=false,score=0,tl=20,spawner,clock;
+const arena=$('arena');
+function spawn(){
+  const bomb=Math.random()<.2,d=document.createElement('div');
+  d.className='drop';d.textContent=bomb?'💣':'✨';
+  d.style.left=Math.random()*(arena.clientWidth-56)+'px';
+  d.style.animationDuration=(1.6+Math.random()*1.2)+'s';
+  d.addEventListener('pointerdown',e=>{
+    e.preventDefault();if(!playing||!d.parentNode)return;
+    score=Math.max(0,score+(bomb?-3:1));$('score').textContent=score;
+    try{tg&&tg.HapticFeedback.impactOccurred(bomb?'heavy':'light')}catch(x){}
+    d.remove();
+  });
+  d.addEventListener('animationend',()=>d.remove());
+  arena.appendChild(d);
+}
+function begin(){
+  arena.innerHTML='';score=0;tl=20;playing=true;
+  $('score').textContent=0;$('t').textContent=tl;$('start').disabled=true;
+  send({t:'earn_start'});spawner=setInterval(spawn,420);
+  clock=setInterval(()=>{tl--;$('t').textContent=tl;if(tl<=0)end()},1000);
+}
+function end(){
+  playing=false;clearInterval(spawner);clearInterval(clock);
+  send({t:'earn_end',score});buzz('success');
+  arena.innerHTML=`<div class="over"><h2>+${score} ✦</h2><div>добавлено на баланс</div></div>`;
+  $('start').disabled=false;$('start').textContent='Ещё раз';
+}
+$('start').onclick=begin;
+</script>
+</body>
+</html>
