@@ -6,7 +6,7 @@
 <title>Лумены</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-:root{--bg:#15101f;--card:#221a33;--line:#352a4d;--ink:#f3eefc;--dim:#9c90b8;--ember:#ff7a3d;--mint:#4de8b0;--red:#ff5d73}
+:root{--bg:#0e141b;--card:#17202b;--line:#263444;--ink:#eaf2fa;--dim:#8ea0b4;--ember:#5db7f5;--mint:#4de8b0;--red:#ff5d73}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:16px/1.4 -apple-system,"Segoe UI",Roboto,sans-serif;overscroll-behavior:none}
 body{padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);display:flex;flex-direction:column;max-width:480px;margin:0 auto}
@@ -15,7 +15,7 @@ header{display:flex;justify-content:space-between;align-items:center;padding:12p
 .bal{font-size:22px;font-weight:800;color:var(--ember);font-variant-numeric:tabular-nums}
 nav{display:flex;gap:8px;padding:0 16px 8px}
 nav button{flex:1;padding:10px;border:1px solid var(--line);background:transparent;color:var(--dim);border-radius:12px;font:inherit;font-weight:600}
-nav button.on{background:var(--ember);border-color:var(--ember);color:#1b0f08}
+nav button.on{background:var(--ember);border-color:var(--ember);color:#06141f}
 main{flex:1;overflow-y:auto;padding:0 16px 24px}
 section{display:none}section.on{display:block}
 .stage{position:relative;width:min(300px,80vw);margin:6px auto 0;aspect-ratio:1}
@@ -41,19 +41,22 @@ canvas{width:100%;height:100%;display:block}
 @keyframes fall{to{transform:translateY(450px)}}
 .hud{display:flex;justify-content:space-between;font-weight:700;margin:0 0 10px}
 .big{display:block;width:100%;margin-top:12px;padding:14px}
-.over{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;background:rgba(21,16,31,.85)}
+.over{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;background:rgba(14,20,27,.85)}
 .over h2{margin:0;font-size:28px;color:var(--ember)}
 [data-theme=light]{--bg:#f6f1ea;--card:#fff;--line:#e2d9cc;--ink:#231a2e;--dim:#7a6f8a}
 .card{background:var(--card);border-radius:14px;padding:14px;margin-bottom:12px}
 #stats{display:grid;grid-template-columns:1fr 1fr;gap:12px}#stats div{display:flex;flex-direction:column}#stats span{color:var(--dim);font-size:13px}#stats b{font-size:20px}
 h3{margin:18px 0 8px;font-size:15px;color:var(--dim);font-weight:600}
 .cf{position:fixed;width:8px;height:12px;z-index:9;pointer-events:none}
-.sp{display:block;width:28px;height:28px;background:linear-gradient(135deg,#ffe29a,#ff7a3d);clip-path:polygon(50% 0,62% 38%,100% 50%,62% 62%,50% 100%,38% 62%,0 50%,38% 38%)}
-.bm{display:block;width:26px;height:26px;border-radius:50%;background:#0b0813;border:3px solid var(--red)}
+.sp{display:block;width:28px;height:28px;background:linear-gradient(135deg,#ffffff,#7cc8ff);clip-path:polygon(50% 0,62% 38%,100% 50%,62% 62%,50% 100%,38% 62%,0 50%,38% 38%)}
+.bm{display:block;width:26px;height:26px;border-radius:50%;background:#070b10;border:3px solid var(--red)}
+#snow{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:0}
+header,nav,main{position:relative;z-index:1}
 @media(prefers-reduced-motion:reduce){.bar i{transition:none}}
 </style>
 </head>
 <body>
+<canvas id="snow"></canvas>
 <header><div class="me" id="name">Игрок</div><div class="bal">✦ <span id="bal">0</span></div></header>
 <nav><button class="on" data-t="roul">Рулетка</button><button data-t="earn">Ловец света</button><button data-t="prof">Профиль</button></nav>
 <main>
@@ -65,6 +68,8 @@ h3{margin:18px 0 8px;font-size:15px;color:var(--dim);font-weight:600}
   <div class="chips"><button data-a="10">10</button><button data-a="50">50</button><button data-a="100">100</button><button data-a="all">Всё</button></div>
   <div id="players"></div>
   <div class="hint" id="hist"></div>
+  <div class="hint" style="margin:6px 0">Комната: <b id="rname"></b> · игроков онлайн: <b id="ronline">1</b></div>
+  <div class="bet" style="margin-bottom:8px"><input id="rcode" type="text" placeholder="Код комнаты" maxlength="32" style="font-size:15px"><button class="go" id="rjoin" style="background:var(--card);color:var(--ink);border:1px solid var(--line)">Войти</button></div>
   <button class="chips-btn" id="bots" style="width:100%;margin:0 0 8px;padding:10px;border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:12px;font:inherit">Боты: вкл</button>
   <button class="go big" id="share" style="background:var(--ember)">Позвать друзей</button>
   <p class="hint">Чем больше ставка, тем шире ваш сектор. Раунд стартует, когда ставки сделали двое; если вы один, подключатся боты. Победитель забирает весь банк.</p>
@@ -79,12 +84,12 @@ h3{margin:18px 0 8px;font-size:15px;color:var(--dim);font-weight:600}
   <div class="card"><div id="stats"></div></div>
   <button class="go big" id="daily" disabled>Ежедневный бонус</button>
   <h3>Топ игроков</h3><div id="top"></div>
-  <div class="chips"><button id="tsfx">Звук</button><button id="tth">Тема</button></div>
+  <div class="chips"><button id="tsfx">Звук</button><button id="tth">Тема</button><button id="tsnow">Снег</button></div>
 </section>
 </main>
 <script>
 const tg=window.Telegram&&Telegram.WebApp;
-if(tg){try{tg.ready();tg.expand();tg.setHeaderColor('#15101f');tg.setBackgroundColor('#15101f')}catch(e){}}
+if(tg){try{tg.ready();tg.expand();tg.setHeaderColor('#0e141b');tg.setBackgroundColor('#0e141b')}catch(e){}}
 const buzz=t=>{try{tg&&tg.HapticFeedback&&tg.HapticFeedback.notificationOccurred(t)}catch(e){}};
 const $=id=>document.getElementById(id);
 const user=(tg&&tg.initDataUnsafe&&tg.initDataUnsafe.user)||{};
@@ -101,25 +106,27 @@ document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
 });
 
 /* ---------- РУЛЕТКА (онлайн) ---------- */
-const COLORS=['#ff7a3d','#4de8b0','#7aa2ff','#ffd24d','#d98cff','#ff5d73','#5fd4ff','#b6e84d'];
+const COLORS=['#5db7f5','#ffd24d','#4de8b0','#ff6b8a','#e9edf2','#2f7fd6','#b6e84d','#9ad1ff'];
 const cv=$('wheel'),ctx=cv.getContext('2d');
 const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const S=600;cv.width=cv.height=S;
 const TOTAL=15;
-let botsOn=true,players=[],rot=0,phase='idle',left=0,spinning=false,botName='',ws;
-const roomId=(new URLSearchParams(location.search).get('room')||(tg&&tg.initDataUnsafe&&tg.initDataUnsafe.start_param)||('r'+(user.id||'guest'))).replace(/\W/g,'');
+let online=false,botsOn=true,players=[],rot=0,phase='idle',left=0,spinning=false,botName='',ws;
+let roomId=(new URLSearchParams(location.search).get('room')||(tg&&tg.initDataUnsafe&&tg.initDataUnsafe.start_param)||'main').replace(/\W/g,'');
 function send(m){if(ws&&ws.readyState===1)ws.send(JSON.stringify(m))}
 function connect(){
   const p=new URLSearchParams({room:roomId,initData:(tg&&tg.initData)||'',name:MY,id:user.id||('g'+Math.floor(Math.random()*1e6))});
   ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws?'+p);
-  ws.onclose=()=>{$('status').textContent='Нет связи, подключаемся…';setTimeout(connect,2000)};
+  ws.onopen=()=>{online=true;$('status').textContent=''};
+  ws.onclose=()=>{online=false;$('status').textContent='Нет связи, подключаемся…';setTimeout(connect,2000)};
   ws.onmessage=e=>handle(JSON.parse(e.data));
 }
 function handle(m){
   if(m.t==='me'){setBal(m.balance);myId=String(m.id);if(m.bot)botName=m.bot;onMe(m)}
-  else if(m.t==='state'&&!spinning){players=m.players;phase=m.phase;left=m.left;botsOn=m.bots!==false;hist(m.history||[]);$('bots').textContent='Боты: '+(botsOn?'вкл':'выкл');list();status()}
+  else if(m.t==='state'&&!spinning){players=m.players;phase=m.phase;left=m.left;botsOn=m.bots!==false;hist(m.history||[]);$('rname').textContent=roomId;$('ronline').textContent=m.online||1;$('bots').textContent='Боты: '+(botsOn?'вкл':'выкл');list();status()}
   else if(m.t==='spin'){spinning=true;phase='spin';spin(m)}
   else if(m.t==='result'){showResult(m)}
+  else if(m.t==='earned'){const r=$('earnres');if(r)r.innerHTML=m.ok?'<h2>+'+m.n+' ✦</h2><div>добавлено на баланс</div>':'<div>Не засчитано: '+esc(m.why)+'</div>'}
   else if(m.t==='top')showTop(m.rows)
   else if(m.t==='err'){$('status').className='status lose';$('status').textContent=m.msg}
 }
@@ -134,7 +141,7 @@ function total(){return players.reduce((a,p)=>a+p.bet,0)}
 function draw(){
   const c=S/2,R=S/2-24;ctx.clearRect(0,0,S,S);
   const tot=total();let a=-Math.PI/2+rot;
-  if(!tot){ctx.beginPath();ctx.arc(c,c,R,0,7);ctx.lineWidth=40;ctx.strokeStyle='#352a4d';ctx.stroke()}
+  if(!tot){ctx.beginPath();ctx.arc(c,c,R,0,7);ctx.lineWidth=40;ctx.strokeStyle='#263444';ctx.stroke()}
   players.forEach((p,i)=>{
     const w=p.bet/tot*Math.PI*2;
     ctx.beginPath();ctx.moveTo(c,c);ctx.arc(c,c,R,a,a+w);ctx.closePath();
@@ -143,7 +150,7 @@ function draw(){
   });
   ctx.beginPath();ctx.arc(c,c,R*.42,0,7);ctx.fillStyle=css('--bg');ctx.fill();
   ctx.fillStyle=css('--ink');ctx.textAlign='center';ctx.font='700 44px sans-serif';ctx.fillText('✦ '+tot,c,c+10);
-  ctx.fillStyle='#9c90b8';ctx.font='24px sans-serif';ctx.fillText('банк',c,c+42);
+  ctx.fillStyle='#8ea0b4';ctx.font='24px sans-serif';ctx.fillText('банк',c,c+42);
   ctx.beginPath();ctx.arc(c,14,15,0,7);ctx.fillStyle='#fff';ctx.shadowColor='#000';ctx.shadowBlur=10;ctx.fill();ctx.shadowBlur=0;
 }
 function list(){
@@ -179,6 +186,7 @@ function bet(){
 }
 $('place').onclick=bet;
 $('bots').onclick=()=>send({t:'bots',on:!botsOn});
+$('rjoin').onclick=()=>{const c=$('rcode').value.replace(/[^\w-]/g,'').slice(0,32);if(!c||c===roomId)return;roomId=c;players=[];phase='idle';spinning=false;list();status();$('rname').textContent=c;$('ronline').textContent='1';try{ws.onclose=null;ws.close()}catch(e){}connect()};
 document.querySelectorAll('.chips button').forEach(b=>b.onclick=()=>{$('amt').value=b.dataset.a==='all'?bal:b.dataset.a});
 $('share').onclick=()=>{
   const link='https://t.me/'+botName+'?start='+roomId;
@@ -199,11 +207,25 @@ function onMe(m){
   const d=$('daily');d.disabled=!m.can_claim;d.textContent=m.can_claim?'Забрать бонус ✦ '+m.bonus:'Бонус получен, возвращайтесь завтра';
 }
 function showTop(rows){$('top').innerHTML=rows.map((r,i)=>`<div class="row${String(r.id)===myId?' mine':''}"><b style="background:var(--ember)"></b><span>${i+1}. ${esc(r.name)}</span><em>✦ ${r.bal}</em></div>`).join('')}
-function labels(){$('tsfx').textContent='Звук: '+(sfx?'вкл':'выкл');$('tth').textContent='Тема: '+(document.documentElement.dataset.theme==='light'?'светлая':'тёмная')}
+function labels(){$('tsnow').textContent='Снег: '+(snowOn?'вкл':'выкл');$('tsfx').textContent='Звук: '+(sfx?'вкл':'выкл');$('tth').textContent='Тема: '+(document.documentElement.dataset.theme==='light'?'светлая':'тёмная')}
 $('daily').onclick=()=>send({t:'daily'});
 $('tsfx').onclick=()=>{sfx=!sfx;try{localStorage.setItem('sfx',sfx?'1':'0')}catch(e){}labels();snd.bet()};
 $('tth').onclick=()=>{const t=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=t;try{localStorage.setItem('theme',t)}catch(e){}labels();draw()};
 document.querySelector('nav button[data-t=prof]').addEventListener('click',()=>send({t:'top'}));
+/* снег */
+let snowOn=true;try{snowOn=localStorage.getItem('snow')!=='0'}catch(e){}
+const sc=$('snow'),sx=sc.getContext('2d');let flakes=[],SW=0,SH=0;
+function snowSize(){const d=devicePixelRatio||1;SW=innerWidth;SH=innerHeight;sc.width=SW*d;sc.height=SH*d;sx.setTransform(d,0,0,d,0,0)}
+function mk(top){return{x:Math.random()*SW,y:top?-10:Math.random()*SH,r:1.2+Math.random()*3,v:.35+Math.random()*.9,p:Math.random()*6.28,s:.4+Math.random()*.8}}
+function snowLoop(){
+  requestAnimationFrame(snowLoop);
+  sx.clearRect(0,0,SW,SH);
+  if(!snowOn||document.hidden)return;
+  sx.fillStyle=document.documentElement.dataset.theme==='light'?'rgba(110,140,185,.55)':'rgba(255,255,255,.9)';
+  for(const f of flakes){f.y+=f.v;f.p+=.012*f.s;f.x+=Math.sin(f.p)*.5;if(f.y>SH+5||f.x<-10||f.x>SW+10)Object.assign(f,mk(true));sx.beginPath();sx.arc(f.x,f.y,f.r,0,6.283);sx.fill()}
+}
+try{snowSize();addEventListener('resize',snowSize);flakes=Array.from({length:90},()=>mk(false));snowLoop()}catch(e){}
+$('tsnow').onclick=()=>{snowOn=!snowOn;try{localStorage.setItem('snow',snowOn?'1':'0')}catch(e){}labels()};
 labels();
 
 /* ---------- ЛОВЕЦ ИСКР ---------- */
@@ -224,6 +246,7 @@ function spawn(){
   arena.appendChild(d);
 }
 function begin(){
+  if(!online){arena.innerHTML='<div class="over"><div>Нет связи с сервером.<br>Подождите и попробуйте снова.</div></div>';return}
   arena.innerHTML='';score=0;tl=20;playing=true;
   $('score').textContent=0;$('t').textContent=tl;$('start').disabled=true;
   send({t:'earn_start'});spawner=setInterval(spawn,420);
@@ -231,8 +254,9 @@ function begin(){
 }
 function end(){
   playing=false;clearInterval(spawner);clearInterval(clock);
-  send({t:'earn_end',score});buzz('success');
-  arena.innerHTML=`<div class="over"><h2>+${score} ✦</h2><div>добавлено на баланс</div></div>`;
+  buzz('success');
+  arena.innerHTML='<div class="over"><div id="earnres">Подсчитываем…</div></div>';
+  if(online)send({t:'earn_end',score});else $('earnres').textContent='Нет связи, результат не отправлен';
   $('start').disabled=false;$('start').textContent='Ещё раз';
 }
 $('start').onclick=begin;
