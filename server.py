@@ -5,6 +5,7 @@ from aiohttp import web, ClientSession
 TOKEN = os.environ.get("BOT_TOKEN", "")
 BOT = os.environ.get("BOT_USERNAME", "")
 BASE = os.environ.get("PUBLIC_URL", "").rstrip("/")
+APP_NAME = os.environ.get("APP_SHORT_NAME", "")   # короткое имя из BotFather /newapp (необязательно)
 DEV = os.environ.get("DEV") == "1"          # DEV=1: вход без проверки Telegram (только для тестов)
 DB = os.environ.get("DB_PATH", "db.json")
 BET_TIME, SPIN_TIME, START_BAL, MIN_BAL, EARN_MAX = 15, 6.5, 100, 10, 38
@@ -192,9 +193,12 @@ async def bot_loop():
                     if m.get("text", "").startswith("/start"):
                         room = re.sub(r"\W", "", m["text"].partition(" ")[2])[:32]
                         url = BASE + ("/?room=" + room if room else "/")
+                        path = f"{BOT}/{APP_NAME}" if APP_NAME else BOT
+                        link = f"https://t.me/{path}" + ("?startapp=" + room if room else "")
                         await s.post(api + "sendMessage", json={
                             "chat_id": m["chat"]["id"],
-                            "text": "Рулетка на лумены. Жми, чтобы играть!",
+                            "parse_mode": "HTML",
+                            "text": f'Рулетка на лумены.\n\n<a href="{link}">Открыть игру</a>',
                             "reply_markup": {"inline_keyboard": [[{"text": "Открыть игру", "web_app": {"url": url}}]]}})
             except Exception:
                 await asyncio.sleep(3)
