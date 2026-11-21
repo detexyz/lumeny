@@ -107,7 +107,7 @@ class Room:
 
     def state(s):
         nm = lambda u: U(u)["name"] if not u.startswith("bot:") else u[4:]
-        return {"t": "state", "phase": s.phase, "left": s.left, "bots": s.bots_on, "history": s.hist,
+        return {"t": "state", "phase": s.phase, "left": s.left, "bots": s.bots_on, "history": s.hist, "online": len(set(s.clients.values())),
                 "players": [{"id": u, "name": nm(u), "bet": b} for u, b in s.bets.items()]}
 
     def add_bot(s, name):
@@ -181,7 +181,7 @@ async def ws_handler(req):
     conns.setdefault(uid, set()).add(ws)
     err = lambda t: ws.send_str(json.dumps({"t": "err", "msg": t}))
     await push(uid)
-    await ws.send_str(json.dumps(room.state()))
+    await room.bc(room.state())
     try:
         async for msg in ws:
             try:
@@ -227,16 +227,24 @@ async def ws_handler(req):
             elif t == "earn_start":
                 earn[uid] = time.time()
             elif t == "earn_end":
-                dt = time.time() - earn.pop(uid, 0)
-                if 19 <= dt <= 45:
-                    try:
-                        add_bal(uid, max(0, min(int(m.get("score", 0)), EARN_MAX)))
-                    except Exception:
-                        pass
+                st = earn.pop(uid, 0)
+                dt = time.time() - st
+                try:
+                    sc = max(0, min(int(m.get("score", 0)), EARN_MAX))
+                except Exception:
+                    sc = 0
+                if st and 15 <= dt <= 60:
+                    add_bal(uid, sc)
+                    await ws.send_str(json.dumps({"t": "earned", "ok": True, "n": sc}))
+                else:
+                    why = "слишком быстро" if st else "сессия потерялась, сыграйте ещё раз"
+                    print("EARN REJECTED", uid, round(dt), flush=True)
+                    await ws.send_str(json.dumps({"t": "earned", "ok": False, "why": why}))
                 await push(uid)
     finally:
         room.clients.pop(ws, None)
         conns.get(uid, set()).discard(ws)
+        asyncio.create_task(room.bc(room.state()))
     return ws
 
 
