@@ -49,6 +49,7 @@ try:
     ex("ALTER TABLE u ADD COLUMN luck REAL DEFAULT 1")   # для баз, созданных до появления множителя удачи
 except Exception:
     pass
+EARN = {"catch": (15, 60, 38), "react": (6, 120, 30), "memory": (8, 240, 30), "hilo": (4, 240, 20)}  # (мин. сек, макс. сек, макс. люменов)
 conns, rooms, earn, http = {}, {}, {}, None
 
 
@@ -120,7 +121,7 @@ class Room:
     def state(s):
         nm = lambda u: U(u)["name"] if not u.startswith("bot:") else u[4:]
         return {"t": "state", "phase": s.phase, "left": s.left, "bots": s.bots_on, "history": s.hist, "online": len(set(s.clients.values())),
-                "players": [{"id": u, "name": nm(u), "bet": b, "luck": lk(u), "w": round(b * lk(u), 2)} for u, b in s.bets.items()]}
+                "players": [{"id": u, "name": nm(u), "bet": b} for u, b in s.bets.items()]}
 
     def add_bot(s, name):
         humans = [b for u, b in s.bets.items() if not u.startswith("bot:")]
@@ -152,13 +153,18 @@ class Room:
         ids, pot = list(s.bets), sum(s.bets.values())
         wt = {u: s.bets[u] * lk(u) for u in ids}
         W = sum(wt.values())
-        r, acc, win, start = rng.uniform(0, W), 0, ids[-1], W - wt[ids[-1]]
+        r, acc, win = rng.uniform(0, W), 0, ids[-1]
         for u in ids:
             if r < acc + wt[u]:
-                win, start = u, acc
+                win = u
                 break
             acc += wt[u]
-        target = 2 * math.pi * (start + wt[win] * rng.uniform(.1, .9)) / W
+        before = 0                                   # угол считаем по видимым ставкам: колесо выглядит обычным
+        for u in ids:
+            if u == win:
+                break
+            before += s.bets[u]
+        target = 2 * math.pi * (before + s.bets[win] * rng.uniform(.1, .9)) / pot
         await s.bc({"t": "spin", "winner": win, "pot": pot, "target": target})
         await asyncio.sleep(SPIN_TIME)
         humans = [u for u in ids if not u.startswith("bot:")]
@@ -239,20 +245,22 @@ async def ws_handler(req):
                 rows = ex("SELECT id,name,bal FROM u ORDER BY bal DESC LIMIT 10").fetchall()
                 await ws.send_str(json.dumps({"t": "top", "rows": [dict(r) for r in rows]}))
             elif t == "earn_start":
-                earn[uid] = time.time()
+                earn[uid] = (time.time(), m.get("game") if m.get("game") in EARN else "catch")
             elif t == "earn_end":
-                st = earn.pop(uid, 0)
+                st, g = earn.pop(uid, (0, "catch"))
+                lo, hi, cap = EARN[g]
                 dt = time.time() - st
                 try:
-                    sc = max(0, min(int(m.get("score", 0)), EARN_MAX))
+                    sc = max(0, min(int(m.get("score", 0)), cap))
                 except Exception:
                     sc = 0
-                if st and 15 <= dt <= 60:
+                why = ("сессия потерялась, сыграйте ещё раз" if not st else "время вышло" if dt > hi
+                       else "слишком быстро" if sc and dt < lo else None)
+                if why is None:
                     add_bal(uid, sc)
                     await ws.send_str(json.dumps({"t": "earned", "ok": True, "n": sc}))
                 else:
-                    why = "слишком быстро" if st else "сессия потерялась, сыграйте ещё раз"
-                    print("EARN REJECTED", uid, round(dt), flush=True)
+                    print("EARN REJECTED", uid, g, round(dt), flush=True)
                     await ws.send_str(json.dumps({"t": "earned", "ok": False, "why": why}))
                 await push(uid)
     finally:
@@ -326,7 +334,7 @@ async def admin_cmd(chat, text):
             for rm in rooms.values():
                 if p[1] in rm.clients.values():
                     asyncio.create_task(rm.bc(rm.state()))
-            await reply(f"{U(p[1])['name']}: множитель удачи ×{k}")
+            await reply(f"{U(p[1])['name']}: множитель удачи ×{k} (игроки этого не видят)")
         else:
             rows = ex("SELECT id,name,luck FROM u WHERE luck<>1").fetchall()
             await reply("\n".join(f"{r['id']} {r['name']} ×{r['luck']}" for r in rows) or "Особых множителей нет")
