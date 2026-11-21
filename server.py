@@ -1,4 +1,4 @@
-import asyncio, hashlib, hmac, json, math, os, random, re, sqlite3, time
+import asyncio, base64, hashlib, hmac, json, math, os, random, re, sqlite3, time
 from urllib.parse import parse_qsl
 from aiohttp import web, ClientSession
 
@@ -295,6 +295,29 @@ async def open_msg(chat, room="", text="Рулетка на лумены."):
     return r
 
 
+async def flash(m, secs):
+    """Админ-фото: скачиваем у Telegram и показываем на экранах всех подключённых игроков."""
+    photos = m.get("photo") or (m.get("reply_to_message") or {}).get("photo") or []
+    pick = next((p for p in reversed(photos) if p.get("file_size", 0) <= 1_500_000), None)
+    if not pick:
+        return 0
+    path = (await tg("getFile", file_id=pick["file_id"])).get("result", {}).get("file_path")
+    if not path:
+        return 0
+    async with http.get(f"https://api.telegram.org/file/bot{TOKEN}/{path}") as r:
+        data = await r.read()
+    msg = json.dumps({"t": "flash", "ms": int(secs * 1000), "img": "data:image/jpeg;base64," + base64.b64encode(data).decode()})
+    n = 0
+    for wss in list(conns.values()):
+        for ws in list(wss):
+            try:
+                await ws.send_str(msg)
+                n += 1
+            except Exception:
+                pass
+    return n
+
+
 async def admin_cmd(chat, text):
     p = text.split(maxsplit=2)
     c = p[0].split("@")[0]
@@ -351,15 +374,26 @@ async def admin_cmd(chat, text):
             await asyncio.sleep(.05)
         await reply(f"Отправлено: {k}")
     else:
-        await reply("/stats\n/players\n/give ID число\n/reset ID (или /reset ID число)\n/reset all да\n/luck ID множитель (0.1–5)\n/luck — список\n/broadcast текст")
+        await reply("/stats\n/players\n/give ID число\n/reset ID (или /reset ID число)\n/reset all да\n/luck ID множитель (0.1–5)\n/luck — список\n/flash — фото с подписью /flash [секунды]\n/broadcast текст")
 
 
 async def handle_update(up):
     m = up.get("message") or {}
-    text, uid = m.get("text", ""), str(m.get("from", {}).get("id", ""))
+    text, uid = m.get("text") or m.get("caption") or "", str(m.get("from", {}).get("id", ""))
     if not text.startswith("/") or not uid:
         return
     cmd = text.split()[0].split("@")[0]
+    if cmd == "/flash":
+        if ADMIN and uid == ADMIN:
+            parts = text.split()
+            try:
+                secs = max(.5, min(float(parts[1].replace(",", ".")), 10)) if len(parts) > 1 else 2.0
+            except ValueError:
+                secs = 2.0
+            n = await flash(m, secs)
+            await tg("sendMessage", chat_id=m["chat"]["id"],
+                     text=f"Показано на экранах: {n}" if n else "Отправьте фото с подписью /flash (или ответьте /flash на фото)")
+        return
     if cmd == "/start":
         ex("INSERT OR IGNORE INTO u(id,name,bal) VALUES(?,?,?)", (uid, m["from"].get("first_name", "Игрок")[:20], START_BAL))
         S(uid, started=1, remind=0)
