@@ -59,6 +59,11 @@ header,nav,main{position:relative;z-index:1}
 .box.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;min-height:0;align-content:start}
 .mc{aspect-ratio:1;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font-size:30px;font:inherit;font-size:30px}.mc.up{background:var(--card)}
 .num{font-size:64px;font-weight:800}.row2{display:flex;gap:10px}
+.glow{position:fixed;inset:0;pointer-events:none;z-index:40;opacity:0;animation:glow 1.6s ease-out}
+.glow.win{box-shadow:inset 0 0 90px 16px rgba(77,232,176,.5)}.glow.lose{box-shadow:inset 0 0 90px 16px rgba(255,93,115,.5)}
+@keyframes glow{0%{opacity:0}25%{opacity:1}100%{opacity:0}}
+.flash{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.88)}
+.flash img{max-width:92%;max-height:88%;border-radius:12px}
 @media(prefers-reduced-motion:reduce){.bar i{transition:none}}
 </style>
 </head>
@@ -140,6 +145,7 @@ function handle(m){
   else if(m.t==='spin'){spinning=true;phase='spin';spin(m)}
   else if(m.t==='result'){showResult(m)}
   else if(m.t==='earned'){const r=$('earnres');if(r)r.innerHTML=m.ok?'<h2>+'+m.n+' ✦</h2><div>добавлено на баланс</div>':'<div>Не засчитано: '+esc(m.why)+'</div>'}
+  else if(m.t==='flash')showFlash(m.img,m.ms)
   else if(m.t==='top')showTop(m.rows)
   else if(m.t==='err'){$('status').className='status lose';$('status').textContent=m.msg}
 }
@@ -185,8 +191,8 @@ function spin(m){
 }
 function showResult(m){
   const s=$('status'),mine=players.some(p=>p.id===myId);
-  if(m.winner===myId){s.textContent='Вы выиграли ✦ '+m.pot+'!';s.className='status win';buzz('success');snd.win();confetti()}
-  else{s.textContent='Выиграл '+m.name+' · ✦ '+m.pot;s.className='status'+(mine?' lose':'');if(mine){buzz('error');snd.lose()}}
+  if(m.winner===myId){s.textContent='Вы выиграли ✦ '+m.pot+'!';s.className='status win';buzz('success');snd.win();confetti();glow('win')}
+  else{s.textContent='Выиграл '+m.name+' · ✦ '+m.pot;s.className='status'+(mine?' lose':'');if(mine){buzz('error');snd.lose();glow('lose')}}
   spinning=false;phase='end';
   setTimeout(()=>{$('place').disabled=false},4000);
 }
@@ -214,6 +220,8 @@ try{sfx=localStorage.getItem('sfx')!=='0';document.documentElement.dataset.theme
 function tone(f,d,t=0,type='sine',v=.08){if(!sfx)return;try{AC=AC||new(window.AudioContext||window.webkitAudioContext)();const o=AC.createOscillator(),g=AC.createGain(),s=AC.currentTime+t;o.type=type;o.frequency.value=f;g.gain.setValueAtTime(v,s);g.gain.exponentialRampToValueAtTime(.0001,s+d);o.connect(g);g.connect(AC.destination);o.start(s);o.stop(s+d)}catch(e){}}
 const snd={bet:()=>tone(660,.08),spin:()=>{let t=0;for(let i=0;i<22;i++){tone(300,.03,t,'square',.03);t+=.08+i*.012}},win:()=>[523,659,784,1047].forEach((f,i)=>tone(f,.25,i*.1)),lose:()=>{tone(220,.3);tone(165,.4,.15)}};
 function confetti(){for(let i=0;i<60;i++){const e=document.createElement('i');e.className='cf';e.style.cssText='left:50%;top:40%;background:'+COLORS[i%8];document.body.appendChild(e);const a=Math.random()*6.28,v=120+Math.random()*220;e.animate([{transform:'translate(0,0) rotate(0)',opacity:1},{transform:`translate(${Math.cos(a)*v}px,${Math.sin(a)*v+300}px) rotate(${Math.random()*720}deg)`,opacity:0}],{duration:1400+Math.random()*600,easing:'cubic-bezier(.2,.7,.3,1)'}).onfinish=()=>e.remove()}}
+function glow(k){const e=document.createElement('div');e.className='glow '+k;document.body.appendChild(e);setTimeout(()=>e.remove(),1700)}
+function showFlash(src,ms){const d=document.createElement('div');d.className='flash';const i=new Image();i.onload=()=>{d.appendChild(i);document.body.appendChild(d);setTimeout(()=>d.remove(),ms||2000)};i.src=src}
 function hist(a){$('hist').textContent=a.length?'Последние победители: '+a.map(x=>x.name+' ✦'+x.pot).join(' · '):''}
 function onMe(m){
   $('stats').innerHTML=[['Раундов',m.rounds],['Побед',m.wins],['Лучший выигрыш','✦ '+m.best],['Серия дней',m.streak]].map(([a,b])=>`<div><span>${a}</span><b>${b}</b></div>`).join('');
