@@ -123,7 +123,7 @@ function connect(){
 }
 function handle(m){
   if(m.t==='me'){setBal(m.balance);myId=String(m.id);if(m.bot)botName=m.bot;onMe(m)}
-  else if(m.t==='state'&&!spinning){players=m.players;phase=m.phase;left=m.left;botsOn=m.bots!==false;hist(m.history||[]);$('rname').textContent=roomId;$('ronline').textContent=m.online||1;$('bots').textContent='Боты: '+(botsOn?'вкл':'выкл');list();status()}
+  else if(m.t==='state'&&!spinning){players=m.players.map(p=>({...p,w:p.w??p.bet}));phase=m.phase;left=m.left;botsOn=m.bots!==false;hist(m.history||[]);$('rname').textContent=roomId;$('ronline').textContent=m.online||1;$('bots').textContent='Боты: '+(botsOn?'вкл':'выкл');list();status()}
   else if(m.t==='spin'){spinning=true;phase='spin';spin(m)}
   else if(m.t==='result'){showResult(m)}
   else if(m.t==='earned'){const r=$('earnres');if(r)r.innerHTML=m.ok?'<h2>+'+m.n+' ✦</h2><div>добавлено на баланс</div>':'<div>Не засчитано: '+esc(m.why)+'</div>'}
@@ -137,26 +137,26 @@ function status(){
   $('timer').style.width=(phase==='bet'?left/TOTAL*100:0)+'%';
 }
 setInterval(()=>{if(phase==='bet'&&left>0&&!spinning){left=Math.max(0,left-.25);status()}},250);
-function total(){return players.reduce((a,p)=>a+p.bet,0)}
+function total(){return players.reduce((a,p)=>a+p.w,0)}
 function draw(){
   const c=S/2,R=S/2-24;ctx.clearRect(0,0,S,S);
-  const tot=total();let a=-Math.PI/2+rot;
+  const tot=total(),pot=players.reduce((x,p)=>x+p.bet,0);let a=-Math.PI/2+rot;
   if(!tot){ctx.beginPath();ctx.arc(c,c,R,0,7);ctx.lineWidth=40;ctx.strokeStyle='#263444';ctx.stroke()}
   players.forEach((p,i)=>{
-    const w=p.bet/tot*Math.PI*2;
+    const w=p.w/tot*Math.PI*2;
     ctx.beginPath();ctx.moveTo(c,c);ctx.arc(c,c,R,a,a+w);ctx.closePath();
     ctx.fillStyle=COLORS[i%COLORS.length];ctx.fill();ctx.lineWidth=3;ctx.strokeStyle=css('--bg');ctx.stroke();
     a+=w;
   });
   ctx.beginPath();ctx.arc(c,c,R*.42,0,7);ctx.fillStyle=css('--bg');ctx.fill();
-  ctx.fillStyle=css('--ink');ctx.textAlign='center';ctx.font='700 44px sans-serif';ctx.fillText('✦ '+tot,c,c+10);
+  ctx.fillStyle=css('--ink');ctx.textAlign='center';ctx.font='700 44px sans-serif';ctx.fillText('✦ '+pot,c,c+10);
   ctx.fillStyle='#8ea0b4';ctx.font='24px sans-serif';ctx.fillText('банк',c,c+42);
-  ctx.beginPath();ctx.arc(c,14,15,0,7);ctx.fillStyle='#fff';ctx.shadowColor='#000';ctx.shadowBlur=10;ctx.fill();ctx.shadowBlur=0;
+  ctx.save();ctx.shadowColor='rgba(0,0,0,.5)';ctx.shadowBlur=14;ctx.beginPath();ctx.moveTo(c,46);ctx.lineTo(c-24,6);ctx.quadraticCurveTo(c,18,c+24,6);ctx.closePath();ctx.fillStyle='#fff';ctx.fill();ctx.shadowBlur=0;ctx.lineJoin='round';ctx.lineWidth=5;ctx.strokeStyle=css('--ember');ctx.stroke();ctx.restore();
 }
 function list(){
   const tot=total();
   $('players').innerHTML=players.map((p,i)=>({p,i})).sort((x,y)=>y.p.bet-x.p.bet).map(({p,i})=>
-    `<div class="row${p.id===myId?' mine':''}"><b style="background:${COLORS[i%COLORS.length]}"></b><span>${esc(p.name)}</span><em>✦ ${p.bet} · ${(p.bet/tot*100).toFixed(1)}%</em></div>`).join('');
+    `<div class="row${p.id===myId?' mine':''}"><b style="background:${COLORS[i%COLORS.length]}"></b><span>${esc(p.name)}${p.luck&&p.luck!==1?' ×'+p.luck:''}</span><em>✦ ${p.bet} · ${(p.w/tot*100).toFixed(1)}%</em></div>`).join('');
   draw();
 }
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
