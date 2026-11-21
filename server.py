@@ -244,16 +244,25 @@ async def ws_handler(req):
 async def tg(method, **kw):
     try:
         async with http.post(f"https://api.telegram.org/bot{TOKEN}/{method}", json=kw) as r:
-            return await r.json()
-    except Exception:
+            data = await r.json()
+            if not data.get("ok"):
+                print("TELEGRAM ERROR", method, data, flush=True)
+            return data
+    except Exception as e:
+        print("TELEGRAM REQUEST FAILED", method, repr(e), flush=True)
         return {}
 
 
-def open_msg(chat, room="", text="Рулетка на лумены."):
+async def open_msg(chat, room="", text="Рулетка на лумены."):
     url = BASE + ("/?room=" + room if room else "/")
     link = f"https://t.me/{BOT + '/' + APP_NAME if APP_NAME else BOT}" + ("?startapp=" + room if room else "")
-    return tg("sendMessage", chat_id=chat, parse_mode="HTML", text=f'{text}\n\n<a href="{link}">Открыть игру</a>',
-              reply_markup={"inline_keyboard": [[{"text": "Открыть игру", "web_app": {"url": url}}]]})
+    body = {"chat_id": chat, "parse_mode": "HTML", "text": f'{text}\n\n<a href="{link}">Открыть игру</a>'}
+    if BASE.startswith("https://"):
+        body["reply_markup"] = {"inline_keyboard": [[{"text": "Открыть игру", "web_app": {"url": url}}]]}
+    r = await tg("sendMessage", **body)
+    if not r.get("ok"):      # запасной вариант: простое сообщение без кнопки и ссылки
+        r = await tg("sendMessage", chat_id=chat, text=f"{text}\nИгра пока не настроена. Проверьте PUBLIC_URL и BOT_USERNAME.")
+    return r
 
 
 async def admin_cmd(chat, text):
@@ -277,28 +286,39 @@ async def admin_cmd(chat, text):
         await reply("/stats\n/give ID число\n/broadcast текст")
 
 
+async def handle_update(up):
+    m = up.get("message") or {}
+    text, uid = m.get("text", ""), str(m.get("from", {}).get("id", ""))
+    if not text.startswith("/") or not uid:
+        return
+    cmd = text.split()[0].split("@")[0]
+    if cmd == "/start":
+        ex("INSERT OR IGNORE INTO u(id,name,bal) VALUES(?,?,?)", (uid, m["from"].get("first_name", "Игрок")[:20], START_BAL))
+        S(uid, started=1, remind=0)
+        await open_msg(m["chat"]["id"], re.sub(r"\W", "", text.partition(" ")[2])[:32])
+    elif cmd == "/stop":
+        if U(uid):
+            S(uid, remind=999999)
+        await tg("sendMessage", chat_id=m["chat"]["id"], text="Уведомления выключены. Вернуть: /start")
+    elif ADMIN and uid == ADMIN:
+        await admin_cmd(m["chat"]["id"], text)
+
+
 async def bot_loop():
     off = 0
+    await tg("deleteWebhook")
+    print("BOT STARTED:", (await tg("getMe")).get("result", {}).get("username"), flush=True)
     while True:
         r = await tg("getUpdates", offset=off, timeout=30)
         if not r.get("ok"):
             await asyncio.sleep(3)
+            continue
         for up in r.get("result", []):
             off = up["update_id"] + 1
-            m = up.get("message") or {}
-            text, uid = m.get("text", ""), str(m.get("from", {}).get("id", ""))
-            if not text.startswith("/") or not uid:
-                continue
-            cmd = text.split()[0].split("@")[0]
-            if cmd == "/start":
-                ex("INSERT OR IGNORE INTO u(id,name,bal) VALUES(?,?,?)", (uid, m["from"].get("first_name", "Игрок")[:20], START_BAL))
-                S(uid, started=1, remind=0)
-                await open_msg(m["chat"]["id"], re.sub(r"\W", "", text.partition(" ")[2])[:32])
-            elif cmd == "/stop":
-                S(uid, remind=999999) if U(uid) else None
-                await tg("sendMessage", chat_id=m["chat"]["id"], text="Уведомления выключены. Вернуть: /start")
-            elif ADMIN and uid == ADMIN:
-                await admin_cmd(m["chat"]["id"], text)
+            try:
+                await handle_update(up)
+            except Exception as e:
+                print("HANDLER ERROR", repr(e), flush=True)
 
 
 async def remind_loop():
@@ -335,4 +355,3 @@ app.on_startup.append(on_start)
 app.on_cleanup.append(on_stop)
 if __name__ == "__main__":
     web.run_app(app, port=int(os.environ.get("PORT", 8080)))
-  
