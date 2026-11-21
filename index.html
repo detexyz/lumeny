@@ -52,13 +52,20 @@ h3{margin:18px 0 8px;font-size:15px;color:var(--dim);font-weight:600}
 .bm{display:block;width:26px;height:26px;border-radius:50%;background:#070b10;border:3px solid var(--red)}
 #snow{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:0}
 header,nav,main{position:relative;z-index:1}
+.g{display:none}.g.on{display:block}
+.sub{display:flex;gap:6px;margin:0 0 12px;overflow-x:auto}.sub button{flex:none;padding:8px 12px;border:1px solid var(--line);background:transparent;color:var(--dim);border-radius:10px;font:inherit;font-size:14px}.sub button.on{color:var(--ink);border-color:var(--ember)}
+.box{position:relative;min-height:300px;background:var(--card);border-radius:16px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;font-weight:700;text-align:center;padding:16px;user-select:none;touch-action:manipulation}
+.box.wait{background:#a8404f}.box.go{background:#2fb98a;color:#04231a}
+.box.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;min-height:0;align-content:start}
+.mc{aspect-ratio:1;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font-size:30px;font:inherit;font-size:30px}.mc.up{background:var(--card)}
+.num{font-size:64px;font-weight:800}.row2{display:flex;gap:10px}
 @media(prefers-reduced-motion:reduce){.bar i{transition:none}}
 </style>
 </head>
 <body>
 <canvas id="snow"></canvas>
 <header><div class="me" id="name">Игрок</div><div class="bal">✦ <span id="bal">0</span></div></header>
-<nav><button class="on" data-t="roul">Рулетка</button><button data-t="earn">Ловец света</button><button data-t="prof">Профиль</button></nav>
+<nav><button class="on" data-t="roul">Рулетка</button><button data-t="earn">Заработок</button><button data-t="prof">Профиль</button></nav>
 <main>
 <section id="roul" class="on">
   <div class="stage"><canvas id="wheel"></canvas></div>
@@ -75,10 +82,16 @@ header,nav,main{position:relative;z-index:1}
   <p class="hint">Чем больше ставка, тем шире ваш сектор. Раунд стартует, когда ставки сделали двое; если вы один, подключатся боты. Победитель забирает весь банк.</p>
 </section>
 <section id="earn">
+  <div class="sub" id="sub"><button class="on" data-g="catch">Ловец света</button><button data-g="react">Реакция</button><button data-g="memory">Память</button><button data-g="hilo">Выше/ниже</button></div>
+  <div class="g on" id="g-catch">
   <div class="hud"><span>Время: <span id="t">20</span></span><span>Лумены: <span id="score">0</span></span></div>
   <div id="arena"><div class="over" id="intro"><h2>Ловец света</h2><div>Лови искры и получай лумены.<br>Бомбы отнимают 3.</div></div></div>
   <button class="go big" id="start">Играть</button>
   <p class="hint">Заработанные лумены сразу идут на баланс для рулетки.</p>
+  </div>
+  <div class="g" id="g-react"><div class="box" id="rbox">5 раундов. Жмите, когда экран станет зелёным.</div><button class="go big" id="rstart">Играть</button><p class="hint">До 30 люменов за игру. Чем быстрее реакция, тем больше. Рано нажали — 0 за раунд.</p></div>
+  <div class="g" id="g-memory"><div class="box" id="mbox">Найдите все 6 пар. Меньше ошибок — больше люменов.</div><button class="go big" id="mstart">Играть</button><p class="hint">До 30 люменов за игру, каждая ошибка отнимает 3.</p></div>
+  <div class="g" id="g-hilo"><div class="box" id="hbox">Угадывайте, будет следующее число выше или ниже.</div><button class="go big" id="hstart">Играть</button><p class="hint">+2 люмена за верный ответ, до 20 за 10 раундов. Ошибка завершает игру.</p></div>
 </section>
 <section id="prof">
   <div class="card"><div id="stats"></div></div>
@@ -181,7 +194,7 @@ function bet(){
   if(phase!=='idle'&&phase!=='bet')return;
   const a=Math.floor(+$('amt').value);
   if(!(a>0)){$('amt').focus();return}
-  if(a>bal){$('status').className='status lose';$('status').textContent='Не хватает люменов. Заработайте их в «Ловце света»';return}
+  if(a>bal){$('status').className='status lose';$('status').textContent='Не хватает люменов. Заработайте их во вкладке «Заработок»';return}
   send({t:'bet',amount:a});snd.bet();try{tg&&tg.HapticFeedback.impactOccurred('light')}catch(e){}
 }
 $('place').onclick=bet;
@@ -260,6 +273,64 @@ function end(){
   $('start').disabled=false;$('start').textContent='Ещё раз';
 }
 $('start').onclick=begin;
+
+/* ---------- новые игры для заработка ---------- */
+document.querySelectorAll('#sub button').forEach(b=>b.onclick=()=>{document.querySelectorAll('#sub button').forEach(x=>x.classList.toggle('on',x===b));document.querySelectorAll('.g').forEach(g=>g.classList.toggle('on',g.id==='g-'+b.dataset.g))});
+function finish(box,score,btn){
+  box.className='box';box.innerHTML='<div class="over"><div id="earnres">Подсчитываем…</div></div>';
+  if(online)send({t:'earn_end',score});else $('earnres').textContent='Нет связи, результат не отправлен';
+  $(btn).disabled=false;$(btn).textContent='Ещё раз';
+}
+function launch(btn,boxId,game,fn){
+  $(btn).onclick=()=>{const box=$(boxId);if(!online){box.className='box';box.textContent='Нет связи с сервером. Подождите и попробуйте снова.';return}
+    $(btn).disabled=true;send({t:'earn_start',game});fn(box,btn)};
+}
+launch('rstart','rbox','react',(box,btn)=>{
+  let n=0,sum=0,state='',t0=0,timer=0;
+  const next=()=>{
+    if(n>=5){box.onpointerdown=null;return finish(box,sum,btn)}
+    box.className='box wait';box.textContent='Жди зелёный…';state='wait';
+    timer=setTimeout(()=>{box.className='box go';box.textContent='Жми!';state='go';t0=performance.now()},1000+Math.random()*2200);
+  };
+  box.onpointerdown=()=>{
+    if(state==='wait'){clearTimeout(timer);n++;state='x';box.className='box';box.textContent='Рано! +0';setTimeout(next,900)}
+    else if(state==='go'){const ms=performance.now()-t0,p=ms<300?6:ms<450?4:ms<700?2:1;sum+=p;n++;state='x';box.className='box';box.textContent=Math.round(ms)+' мс · +'+p;setTimeout(next,900)}
+  };
+  next();
+});
+launch('mstart','mbox','memory',(box,btn)=>{
+  const G=['◆','●','▲','■','★','✚'];
+  const deck=[...G,...G].sort(()=>Math.random()-.5);
+  box.innerHTML='';box.className='box grid';
+  let open=[],found=0,miss=0,lock=false;
+  deck.forEach(g=>{
+    const b=document.createElement('button');b.className='mc';b.dataset.g=g;
+    b.onclick=()=>{
+      if(lock||b.classList.contains('up'))return;
+      b.classList.add('up');b.textContent=g;b.style.color=COLORS[G.indexOf(g)];open.push(b);
+      if(open.length<2)return;
+      const [x,y]=open;open=[];
+      if(x.dataset.g===y.dataset.g){found++;if(found===6)setTimeout(()=>finish(box,Math.max(6,30-miss*3),btn),500)}
+      else{miss++;lock=true;setTimeout(()=>{[x,y].forEach(e=>{e.classList.remove('up');e.textContent=''});lock=false},700)}
+    };
+    box.appendChild(b);
+  });
+});
+launch('hstart','hbox','hilo',(box,btn)=>{
+  let cur=1+Math.floor(Math.random()*100),pts=0,round=0;
+  const show=()=>{
+    box.className='box';
+    box.innerHTML='<div class="num">'+cur+'</div><div class="row2"><button class="go" data-d="1">Выше</button><button class="go" data-d="0" style="background:var(--red);color:#fff">Ниже</button></div><div class="hint">Раунд '+(round+1)+' из 10 · очки: '+pts+'</div>';
+    box.querySelectorAll('button').forEach(b=>b.onclick=()=>{
+      let nx;do{nx=1+Math.floor(Math.random()*100)}while(nx===cur);
+      const ok=(nx>cur)===(b.dataset.d==='1');
+      round++;if(ok)pts+=2;cur=nx;
+      if(!ok||round>=10)return finish(box,pts,btn);
+      show();
+    });
+  };
+  show();
+});
 </script>
 </body>
 </html>
