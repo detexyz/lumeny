@@ -14,7 +14,7 @@ BOT_NAMES = ["Лиса", "Комета", "Нокс", "Мира", "Тень", "О
 rng = random.SystemRandom()
 DATABASE_URL = os.environ.get("DATABASE_URL", "")   # бесплатная база (Neon/Supabase); без неё используется SQLite-файл
 SCHEMA = """CREATE TABLE IF NOT EXISTS u(id TEXT PRIMARY KEY, name TEXT, bal INT DEFAULT 100, day INT DEFAULT 0,
-  streak INT DEFAULT 0, rounds INT DEFAULT 0, wins INT DEFAULT 0, best INT DEFAULT 0, started INT DEFAULT 0, remind INT DEFAULT 0)"""
+  streak INT DEFAULT 0, rounds INT DEFAULT 0, wins INT DEFAULT 0, best INT DEFAULT 0, started INT DEFAULT 0, remind INT DEFAULT 0, luck REAL DEFAULT 1)"""
 if DATABASE_URL:
     import psycopg2, psycopg2.extras
     pg = None
@@ -45,6 +45,10 @@ else:
         lite.commit()
         return c
 ex(SCHEMA)
+try:
+    ex("ALTER TABLE u ADD COLUMN luck REAL DEFAULT 1")   # для баз, созданных до появления множителя удачи
+except Exception:
+    pass
 conns, rooms, earn, http = {}, {}, {}, None
 
 
@@ -92,6 +96,14 @@ def verify(init):
     return json.loads(d["user"])
 
 
+def lk(u):
+    """Множитель удачи игрока (боты всегда 1). Меняется админ-командой /luck и виден всем на колесе."""
+    if u.startswith("bot:"):
+        return 1.0
+    r = U(u)
+    return float(r.get("luck") or 1.0) if r else 1.0
+
+
 class Room:
     def __init__(s):
         s.clients, s.bets, s.phase, s.left, s.task = {}, {}, "idle", 0, None
@@ -108,7 +120,7 @@ class Room:
     def state(s):
         nm = lambda u: U(u)["name"] if not u.startswith("bot:") else u[4:]
         return {"t": "state", "phase": s.phase, "left": s.left, "bots": s.bots_on, "history": s.hist, "online": len(set(s.clients.values())),
-                "players": [{"id": u, "name": nm(u), "bet": b} for u, b in s.bets.items()]}
+                "players": [{"id": u, "name": nm(u), "bet": b, "luck": lk(u), "w": round(b * lk(u), 2)} for u, b in s.bets.items()]}
 
     def add_bot(s, name):
         humans = [b for u, b in s.bets.items() if not u.startswith("bot:")]
@@ -138,13 +150,15 @@ class Room:
             s.left -= 1
         s.phase = "spin"
         ids, pot = list(s.bets), sum(s.bets.values())
-        r, acc, win, start = rng.uniform(0, pot), 0, ids[-1], pot - s.bets[ids[-1]]
+        wt = {u: s.bets[u] * lk(u) for u in ids}
+        W = sum(wt.values())
+        r, acc, win, start = rng.uniform(0, W), 0, ids[-1], W - wt[ids[-1]]
         for u in ids:
-            if r < acc + s.bets[u]:
+            if r < acc + wt[u]:
                 win, start = u, acc
                 break
-            acc += s.bets[u]
-        target = 2 * math.pi * (start + s.bets[win] * rng.uniform(.1, .9)) / pot
+            acc += wt[u]
+        target = 2 * math.pi * (start + wt[win] * rng.uniform(.1, .9)) / W
         await s.bc({"t": "spin", "winner": win, "pot": pot, "target": target})
         await asyncio.sleep(SPIN_TIME)
         humans = [u for u in ids if not u.startswith("bot:")]
@@ -281,6 +295,44 @@ async def admin_cmd(chat, text):
         add_bal(p[1], int(p[2]))
         await push(p[1])
         await reply(f"Готово: {U(p[1])['name']} теперь ✦ {U(p[1])['bal']}")
+    elif c == "/reset" and len(p) >= 2:
+        if p[1] == "all":
+            if len(p) == 3 and p[2].lower() == "да":
+                ex("UPDATE u SET bal=0")
+                for uid in list(conns):
+                    await push(uid)
+                await reply("Балансы всех игроков обнулены")
+            else:
+                await reply("Это обнулит баланс ВСЕХ игроков. Подтвердите: /reset all да")
+        elif U(p[1]):
+            try:
+                v = max(0, int(p[2])) if len(p) == 3 else 0
+            except ValueError:
+                return await reply("Сумма должна быть целым числом")
+            S(p[1], bal=v)
+            await push(p[1])
+            await reply(f"{U(p[1])['name']}: баланс теперь ✦ {v}")
+        else:
+            await reply("Игрок с таким ID не найден")
+    elif c == "/luck":
+        if len(p) == 3:
+            try:
+                k = round(max(.1, min(float(p[2].replace(",", ".")), 5)), 2)
+            except ValueError:
+                return await reply("Множитель — число от 0.1 до 5 (1 = обычные шансы)")
+            if not U(p[1]):
+                return await reply("Игрок с таким ID не найден")
+            S(p[1], luck=k)
+            for rm in rooms.values():
+                if p[1] in rm.clients.values():
+                    asyncio.create_task(rm.bc(rm.state()))
+            await reply(f"{U(p[1])['name']}: множитель удачи ×{k}")
+        else:
+            rows = ex("SELECT id,name,luck FROM u WHERE luck<>1").fetchall()
+            await reply("\n".join(f"{r['id']} {r['name']} ×{r['luck']}" for r in rows) or "Особых множителей нет")
+    elif c == "/players":
+        rows = ex("SELECT id,name,bal FROM u ORDER BY rounds DESC LIMIT 30").fetchall()
+        await reply("\n".join(f"{r['id']} {r['name']} ✦{r['bal']}" for r in rows) or "Игроков пока нет")
     elif c == "/stats":
         n, s_, st = dict(ex("SELECT COUNT(*) AS a,COALESCE(SUM(bal),0) AS b,COALESCE(SUM(started),0) AS c FROM u").fetchone()).values()
         await reply(f"Игроков: {n}\nНажали Start: {st}\nВсего люменов: {s_}\nКомнат: {len(rooms)}\nОнлайн: {len(conns) and sum(len(v) for v in conns.values())}")
@@ -291,7 +343,7 @@ async def admin_cmd(chat, text):
             await asyncio.sleep(.05)
         await reply(f"Отправлено: {k}")
     else:
-        await reply("/stats\n/give ID число\n/broadcast текст")
+        await reply("/stats\n/players\n/give ID число\n/reset ID (или /reset ID число)\n/reset all да\n/luck ID множитель (0.1–5)\n/luck — список\n/broadcast текст")
 
 
 async def handle_update(up):
@@ -345,10 +397,40 @@ async def index(req):
     return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html"))
 
 
+SECRET = hashlib.sha256(TOKEN.encode()).hexdigest()[:32]
+
+
+async def tg_hook(req):
+    if req.headers.get("X-Telegram-Bot-Api-Secret-Token") != SECRET:
+        return web.Response(status=403)
+    try:
+        up = await req.json()
+    except Exception:
+        return web.Response(text="bad")
+
+    async def go():
+        try:
+            await handle_update(up)
+        except Exception as e:
+            print("HANDLER ERROR", repr(e), flush=True)
+    asyncio.create_task(go())
+    return web.Response(text="ok")
+
+
+async def health(req):
+    return web.Response(text="ok")
+
+
 async def on_start(app):
     global http
     http = ClientSession()
-    if TOKEN:
+    if not TOKEN:
+        return
+    print("BOT:", (await tg("getMe")).get("result", {}).get("username"), flush=True)
+    if BASE.startswith("https://"):      # вебхук: Telegram сам будит сервер при сообщении
+        print("WEBHOOK:", await tg("setWebhook", url=BASE + "/tg", secret_token=SECRET, allowed_updates=["message"]), flush=True)
+        app["tasks"] = [asyncio.create_task(remind_loop())]
+    else:                                 # без PUBLIC_URL: запасной вариант, опрос
         app["tasks"] = [asyncio.create_task(bot_loop()), asyncio.create_task(remind_loop())]
 
 
@@ -359,6 +441,8 @@ async def on_stop(app):
 app = web.Application()
 app.router.add_get("/", index)
 app.router.add_get("/ws", ws_handler)
+app.router.add_post("/tg", tg_hook)
+app.router.add_get("/health", health)
 app.on_startup.append(on_start)
 app.on_cleanup.append(on_stop)
 if __name__ == "__main__":
