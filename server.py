@@ -1,23 +1,84 @@
-import asyncio, hashlib, hmac, json, math, os, random, re, time
+import asyncio, hashlib, hmac, json, math, os, random, re, sqlite3, time
 from urllib.parse import parse_qsl
 from aiohttp import web, ClientSession
 
 TOKEN = os.environ.get("BOT_TOKEN", "")
 BOT = os.environ.get("BOT_USERNAME", "")
 BASE = os.environ.get("PUBLIC_URL", "").rstrip("/")
-APP_NAME = os.environ.get("APP_SHORT_NAME", "")   # короткое имя из BotFather /newapp (необязательно)
-DEV = os.environ.get("DEV") == "1"          # DEV=1: вход без проверки Telegram (только для тестов)
-DB = os.environ.get("DB_PATH", "db.json")
+APP_NAME = os.environ.get("APP_SHORT_NAME", "")
+ADMIN = os.environ.get("ADMIN_ID", "")          # ваш Telegram ID: админ-команды доступны только ему
+DEV = os.environ.get("DEV") == "1"
+DB = os.environ.get("DB_PATH", "db.sqlite")
 BET_TIME, SPIN_TIME, START_BAL, MIN_BAL, EARN_MAX = 15, 6.5, 100, 10, 38
-rng = random.SystemRandom()
-users = json.load(open(DB)) if os.path.exists(DB) else {}
-conns, rooms = {}, {}
 BOT_NAMES = ["Лиса", "Комета", "Нокс", "Мира", "Тень", "Орион", "Зира", "Бублик", "Вега", "Рекс"]
+rng = random.SystemRandom()
+DATABASE_URL = os.environ.get("DATABASE_URL", "")   # бесплатная база (Neon/Supabase); без неё используется SQLite-файл
+SCHEMA = """CREATE TABLE IF NOT EXISTS u(id TEXT PRIMARY KEY, name TEXT, bal INT DEFAULT 100, day INT DEFAULT 0,
+  streak INT DEFAULT 0, rounds INT DEFAULT 0, wins INT DEFAULT 0, best INT DEFAULT 0, started INT DEFAULT 0, remind INT DEFAULT 0)"""
+if DATABASE_URL:
+    import psycopg2, psycopg2.extras
+    pg = None
+
+    def ex(sql, a=()):
+        global pg
+        sql = sql.replace("?", "%s").replace("MAX(best,%s)", "GREATEST(best,%s)")
+        if sql.startswith("INSERT OR IGNORE"):
+            sql = sql.replace("INSERT OR IGNORE", "INSERT") + " ON CONFLICT DO NOTHING"
+        for attempt in (1, 2):
+            try:
+                if pg is None or pg.closed:
+                    pg = psycopg2.connect(DATABASE_URL)
+                    pg.autocommit = True
+                cur = pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                cur.execute(sql, a)
+                return cur
+            except (psycopg2.OperationalError, psycopg2.InterfaceError):
+                pg = None
+                if attempt == 2:
+                    raise
+else:
+    lite = sqlite3.connect(DB, check_same_thread=False)
+    lite.row_factory = sqlite3.Row
+
+    def ex(sql, a=()):
+        c = lite.execute(sql, a)
+        lite.commit()
+        return c
+ex(SCHEMA)
+conns, rooms, earn, http = {}, {}, {}, None
 
 
-def save():
-    with open(DB, "w") as f:
-        json.dump(users, f)
+def U(uid):
+    r = ex("SELECT * FROM u WHERE id=?", (uid,)).fetchone()
+    return dict(r) if r else None
+
+
+def S(uid, **kw):
+    ex("UPDATE u SET " + ",".join(f"{k}=?" for k in kw) + " WHERE id=?", (*kw.values(), uid))
+
+
+def add_bal(uid, d):
+    ex("UPDATE u SET bal=bal+? WHERE id=?", (d, uid))
+
+
+day = lambda: int(time.time() // 86400)
+bonus = lambda st: 50 + min(st, 7) * 10
+
+
+def me(uid):
+    u, d = U(uid), day()
+    nxt = u["streak"] + 1 if u["day"] == d - 1 else 1
+    return {"t": "me", "balance": u["bal"], "id": uid, "bot": BOT, "rounds": u["rounds"], "wins": u["wins"],
+            "best": u["best"], "streak": u["streak"], "can_claim": u["day"] < d, "bonus": bonus(nxt)}
+
+
+async def push(uid):
+    m = json.dumps(me(uid))
+    for ws in list(conns.get(uid, ())):
+        try:
+            await ws.send_str(m)
+        except Exception:
+            pass
 
 
 def verify(init):
@@ -31,19 +92,10 @@ def verify(init):
     return json.loads(d["user"])
 
 
-async def push(uid):
-    m = json.dumps({"t": "me", "balance": users[uid]["bal"], "id": uid, "bot": BOT})
-    for ws in list(conns.get(uid, ())):
-        try:
-            await ws.send_str(m)
-        except Exception:
-            pass
-
-
 class Room:
     def __init__(s):
         s.clients, s.bets, s.phase, s.left, s.task = {}, {}, "idle", 0, None
-        s.bots_on, s.bot_task = True, None
+        s.bots_on, s.bot_task, s.hist = True, None, []
 
     async def bc(s, m):
         data = json.dumps(m)
@@ -54,14 +106,13 @@ class Room:
                 pass
 
     def state(s):
-        nm = lambda u: users[u]["name"] if u in users else u[4:]
-        return {"t": "state", "phase": s.phase, "left": s.left, "bots": s.bots_on,
+        nm = lambda u: U(u)["name"] if not u.startswith("bot:") else u[4:]
+        return {"t": "state", "phase": s.phase, "left": s.left, "bots": s.bots_on, "history": s.hist,
                 "players": [{"id": u, "name": nm(u), "bet": b} for u, b in s.bets.items()]}
 
     def add_bot(s, name):
         humans = [b for u, b in s.bets.items() if not u.startswith("bot:")]
-        ref = max(humans) if humans else 50
-        s.bets["bot:" + name] = max(10, int(ref * rng.uniform(.5, 1.5)))
+        s.bets["bot:" + name] = max(10, int((max(humans) if humans else 50) * rng.uniform(.5, 1.5)))
 
     async def fill_bots(s):
         await asyncio.sleep(2)
@@ -87,26 +138,26 @@ class Room:
             s.left -= 1
         s.phase = "spin"
         ids, pot = list(s.bets), sum(s.bets.values())
-        r, acc, win, start = rng.uniform(0, pot), 0, ids[-1], 0
+        r, acc, win, start = rng.uniform(0, pot), 0, ids[-1], pot - s.bets[ids[-1]]
         for u in ids:
             if r < acc + s.bets[u]:
                 win, start = u, acc
                 break
             acc += s.bets[u]
-        if start == 0 and win != ids[0]:
-            start = pot - s.bets[win]
         target = 2 * math.pi * (start + s.bets[win] * rng.uniform(.1, .9)) / pot
         await s.bc({"t": "spin", "winner": win, "pot": pot, "target": target})
         await asyncio.sleep(SPIN_TIME)
-        if win in users:
-            users[win]["bal"] += pot
-        for u in ids:
-            if u in users:
-                users[u]["bal"] = max(users[u]["bal"], MIN_BAL)
-        save()
-        wname = users[win]["name"] if win in users else win[4:]
+        humans = [u for u in ids if not u.startswith("bot:")]
+        for u in humans:
+            ex("UPDATE u SET rounds=rounds+1 WHERE id=?", (u,))
+        if win in humans:
+            ex("UPDATE u SET bal=bal+?, wins=wins+1, best=MAX(best,?) WHERE id=?", (pot, pot, win))
+        for u in humans:
+            ex("UPDATE u SET bal=? WHERE id=? AND bal<?", (MIN_BAL, u, MIN_BAL))
+        wname = U(win)["name"] if win in humans else win[4:]
+        s.hist = (s.hist + [{"name": wname, "pot": pot}])[-8:]
         await s.bc({"t": "result", "winner": win, "name": wname, "pot": pot})
-        for u in ids:
+        for u in humans:
             await push(u)
         s.bets = {}
         await asyncio.sleep(4)
@@ -122,12 +173,13 @@ async def ws_handler(req):
     if not u:
         await ws.close()
         return ws
-    uid = str(u["id"])
-    rec = users.setdefault(uid, {"name": "", "bal": START_BAL, "start": 0})
-    rec["name"] = u.get("first_name", "Игрок")[:20]
+    uid, name = str(u["id"]), u.get("first_name", "Игрок")[:20]
+    ex("INSERT OR IGNORE INTO u(id,name,bal) VALUES(?,?,?)", (uid, name, START_BAL))
+    S(uid, name=name)
     room = rooms.setdefault(re.sub(r"\W", "", q.get("room", "main"))[:32] or "main", Room())
     room.clients[ws] = uid
     conns.setdefault(uid, set()).add(ws)
+    err = lambda t: ws.send_str(json.dumps({"t": "err", "msg": t}))
     await push(uid)
     await ws.send_str(json.dumps(room.state()))
     try:
@@ -143,13 +195,12 @@ async def ws_handler(req):
                 except Exception:
                     a = 0
                 if room.phase not in ("idle", "bet"):
-                    await ws.send_str(json.dumps({"t": "err", "msg": "Раунд уже идёт"}))
-                elif a < 1 or a > rec["bal"]:
-                    await ws.send_str(json.dumps({"t": "err", "msg": "Недостаточно люменов"}))
+                    await err("Раунд уже идёт")
+                elif a < 1 or a > U(uid)["bal"]:
+                    await err("Недостаточно люменов")
                 else:
-                    rec["bal"] -= a
+                    add_bal(uid, -a)
                     room.bets[uid] = room.bets.get(uid, 0) + a
-                    save()
                     await push(uid)
                     if room.phase == "idle" and len(room.bets) >= 2 and not room.task:
                         room.task = asyncio.create_task(room.run())
@@ -161,18 +212,27 @@ async def ws_handler(req):
             elif t == "bots":
                 room.bots_on = bool(m.get("on"))
                 await room.bc(room.state())
+            elif t == "daily":
+                rec, d = U(uid), day()
+                if rec["day"] >= d:
+                    await err("Бонус уже получен")
+                else:
+                    st = rec["streak"] + 1 if rec["day"] == d - 1 else 1
+                    S(uid, day=d, streak=st)
+                    add_bal(uid, bonus(st))
+                    await push(uid)
+            elif t == "top":
+                rows = ex("SELECT id,name,bal FROM u ORDER BY bal DESC LIMIT 10").fetchall()
+                await ws.send_str(json.dumps({"t": "top", "rows": [dict(r) for r in rows]}))
             elif t == "earn_start":
-                rec["start"] = time.time()
+                earn[uid] = time.time()
             elif t == "earn_end":
-                dt = time.time() - rec.get("start", 0)
-                if rec.get("start") and 19 <= dt <= 45:
+                dt = time.time() - earn.pop(uid, 0)
+                if 19 <= dt <= 45:
                     try:
-                        sc = max(0, min(int(m.get("score", 0)), EARN_MAX))
+                        add_bal(uid, max(0, min(int(m.get("score", 0)), EARN_MAX)))
                     except Exception:
-                        sc = 0
-                    rec["bal"] += sc
-                rec["start"] = 0
-                save()
+                        pass
                 await push(uid)
     finally:
         room.clients.pop(ws, None)
@@ -180,28 +240,77 @@ async def ws_handler(req):
     return ws
 
 
+# ---------- бот: /start, уведомления, админ-команды ----------
+async def tg(method, **kw):
+    try:
+        async with http.post(f"https://api.telegram.org/bot{TOKEN}/{method}", json=kw) as r:
+            return await r.json()
+    except Exception:
+        return {}
+
+
+def open_msg(chat, room="", text="Рулетка на лумены."):
+    url = BASE + ("/?room=" + room if room else "/")
+    link = f"https://t.me/{BOT + '/' + APP_NAME if APP_NAME else BOT}" + ("?startapp=" + room if room else "")
+    return tg("sendMessage", chat_id=chat, parse_mode="HTML", text=f'{text}\n\n<a href="{link}">Открыть игру</a>',
+              reply_markup={"inline_keyboard": [[{"text": "Открыть игру", "web_app": {"url": url}}]]})
+
+
+async def admin_cmd(chat, text):
+    p = text.split(maxsplit=2)
+    c = p[0].split("@")[0]
+    reply = lambda t: tg("sendMessage", chat_id=chat, text=t)
+    if c == "/give" and len(p) == 3 and p[2].lstrip("-").isdigit() and U(p[1]):
+        add_bal(p[1], int(p[2]))
+        await push(p[1])
+        await reply(f"Готово: {U(p[1])['name']} теперь ✦ {U(p[1])['bal']}")
+    elif c == "/stats":
+        n, s_, st = dict(ex("SELECT COUNT(*) AS a,COALESCE(SUM(bal),0) AS b,COALESCE(SUM(started),0) AS c FROM u").fetchone()).values()
+        await reply(f"Игроков: {n}\nНажали Start: {st}\nВсего люменов: {s_}\nКомнат: {len(rooms)}\nОнлайн: {len(conns) and sum(len(v) for v in conns.values())}")
+    elif c == "/broadcast" and len(text.split(maxsplit=1)) == 2:
+        body, k = text.split(maxsplit=1)[1], 0
+        for r in ex("SELECT id FROM u WHERE started=1 AND remind<999999").fetchall():
+            k += bool((await tg("sendMessage", chat_id=r["id"], text=body)).get("ok"))
+            await asyncio.sleep(.05)
+        await reply(f"Отправлено: {k}")
+    else:
+        await reply("/stats\n/give ID число\n/broadcast текст")
+
+
 async def bot_loop():
-    api, off = f"https://api.telegram.org/bot{TOKEN}/", 0
-    async with ClientSession() as s:
-        while True:
-            try:
-                async with s.get(api + "getUpdates", params={"offset": off, "timeout": 30}) as r:
-                    data = await r.json()
-                for u in data.get("result", []):
-                    off = u["update_id"] + 1
-                    m = u.get("message") or {}
-                    if m.get("text", "").startswith("/start"):
-                        room = re.sub(r"\W", "", m["text"].partition(" ")[2])[:32]
-                        url = BASE + ("/?room=" + room if room else "/")
-                        path = f"{BOT}/{APP_NAME}" if APP_NAME else BOT
-                        link = f"https://t.me/{path}" + ("?startapp=" + room if room else "")
-                        await s.post(api + "sendMessage", json={
-                            "chat_id": m["chat"]["id"],
-                            "parse_mode": "HTML",
-                            "text": f'Рулетка на лумены.\n\n<a href="{link}">Открыть игру</a>',
-                            "reply_markup": {"inline_keyboard": [[{"text": "Открыть игру", "web_app": {"url": url}}]]}})
-            except Exception:
-                await asyncio.sleep(3)
+    off = 0
+    while True:
+        r = await tg("getUpdates", offset=off, timeout=30)
+        if not r.get("ok"):
+            await asyncio.sleep(3)
+        for up in r.get("result", []):
+            off = up["update_id"] + 1
+            m = up.get("message") or {}
+            text, uid = m.get("text", ""), str(m.get("from", {}).get("id", ""))
+            if not text.startswith("/") or not uid:
+                continue
+            cmd = text.split()[0].split("@")[0]
+            if cmd == "/start":
+                ex("INSERT OR IGNORE INTO u(id,name,bal) VALUES(?,?,?)", (uid, m["from"].get("first_name", "Игрок")[:20], START_BAL))
+                S(uid, started=1, remind=0)
+                await open_msg(m["chat"]["id"], re.sub(r"\W", "", text.partition(" ")[2])[:32])
+            elif cmd == "/stop":
+                S(uid, remind=999999) if U(uid) else None
+                await tg("sendMessage", chat_id=m["chat"]["id"], text="Уведомления выключены. Вернуть: /start")
+            elif ADMIN and uid == ADMIN:
+                await admin_cmd(m["chat"]["id"], text)
+
+
+async def remind_loop():
+    while True:
+        await asyncio.sleep(1800)
+        d = day()
+        if not 7 <= time.gmtime().tm_hour <= 19:     # время UTC, примерно дневные часы
+            continue
+        for r in ex("SELECT id FROM u WHERE started=1 AND day<? AND remind<?", (d, d)).fetchall():
+            await open_msg(r["id"], text="Ежедневный бонус люменов ждёт вас.")
+            S(r["id"], remind=d)
+            await asyncio.sleep(.05)
 
 
 async def index(req):
@@ -209,13 +318,20 @@ async def index(req):
 
 
 async def on_start(app):
+    global http
+    http = ClientSession()
     if TOKEN:
-        app["bot"] = asyncio.create_task(bot_loop())
+        app["tasks"] = [asyncio.create_task(bot_loop()), asyncio.create_task(remind_loop())]
+
+
+async def on_stop(app):
+    await http.close()
 
 
 app = web.Application()
 app.router.add_get("/", index)
 app.router.add_get("/ws", ws_handler)
 app.on_startup.append(on_start)
+app.on_cleanup.append(on_stop)
 if __name__ == "__main__":
     web.run_app(app, port=int(os.environ.get("PORT", 8080)))
