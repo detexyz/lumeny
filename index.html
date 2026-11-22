@@ -67,6 +67,7 @@ header,nav,main{position:relative;z-index:1}
 nav button{font-size:14px;padding:10px 4px}
 .mini{padding:6px 12px;border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:10px;font:inherit;font-size:14px}.mini:disabled{opacity:.35}
 .toast{position:fixed;top:calc(12px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:60;background:var(--card);border:1px solid var(--ember);padding:10px 16px;border-radius:12px;font-weight:700;max-width:90%;text-align:center}
+.adm{color:#ffd24d;font-weight:800;text-shadow:0 0 10px rgba(255,210,77,.75)}
 @media(prefers-reduced-motion:reduce){.bar i{transition:none}}
 </style>
 </head>
@@ -185,7 +186,7 @@ function draw(){
 function list(){
   const tot=total();
   $('players').innerHTML=players.map((p,i)=>({p,i})).sort((x,y)=>y.p.bet-x.p.bet).map(({p,i})=>
-    `<div class="row${p.id===myId?' mine':''}"><b style="background:${COLORS[i%COLORS.length]}"></b><span>${esc(p.name)}${p.title?' <small style="color:var(--ember)">'+esc(p.title)+'</small>':''}</span><em>✦ ${p.bet} · ${(p.w/tot*100).toFixed(1)}%</em></div>`).join('');
+    `<div class="row${p.id===myId?' mine':''}"><b style="background:${COLORS[i%COLORS.length]}"></b><span>${esc(p.name)}${tt(p.title)}</span><em>✦ ${p.bet} · ${(p.w/tot*100).toFixed(1)}%</em></div>`).join('');
   draw();
 }
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
@@ -237,7 +238,7 @@ function onMe(m){
   $('stats').innerHTML=[['Раундов',m.rounds],['Побед',m.wins],['Лучший выигрыш','✦ '+m.best],['Серия дней',m.streak]].map(([a,b])=>`<div><span>${a}</span><b>${b}</b></div>`).join('');
   const d=$('daily');d.disabled=!m.can_claim;d.textContent=m.can_claim?'Забрать бонус ✦ '+m.bonus:'Бонус получен, возвращайтесь завтра';
 }
-function showTop(rows){$('top').innerHTML=rows.map((r,i)=>`<div class="row${String(r.id)===myId?' mine':''}"><b style="background:var(--ember)"></b><span>${i+1}. ${esc(r.name)}${r.title?' <small style="color:var(--ember)">'+esc(r.title)+'</small>':''}</span><em>✦ ${r.bal}</em></div>`).join('')}
+function showTop(rows){$('top').innerHTML=rows.map((r,i)=>`<div class="row${String(r.id)===myId?' mine':''}"><b style="background:var(--ember)"></b><span>${i+1}. ${esc(r.name)}${tt(r.title)}</span><em>✦ ${r.bal}</em></div>`).join('')}
 function labels(){$('tsnow').textContent='Снег: '+(snowOn?'вкл':'выкл');$('tsfx').textContent='Звук: '+(sfx?'вкл':'выкл');$('tth').textContent='Тема: '+(document.documentElement.dataset.theme==='light'?'светлая':'тёмная')}
 $('daily').onclick=()=>send({t:'daily'});
 $('tsfx').onclick=()=>{sfx=!sfx;try{localStorage.setItem('sfx',sfx?'1':'0')}catch(e){}labels();snd.bet()};
@@ -351,6 +352,7 @@ launch('hstart','hbox','hilo',(box,btn)=>{
 });
 
 /* ---------- магазин и достижения ---------- */
+function tt(t){return t?(t==='Хозяин метели'?' <small class="adm">★ '+esc(t)+'</small>':' <small style="color:var(--ember)">'+esc(t)+'</small>'):''}
 function toast(t){const e=document.createElement('div');e.className='toast';e.textContent=t;document.body.appendChild(e);snd.win();setTimeout(()=>e.remove(),3200)}
 function renderShop(m){
   $('titles').innerHTML=m.items.map(i=>{
