@@ -113,6 +113,7 @@ ACH = {  # id: (название, условие, награда, титул)
 }
 TITLES = {k: v[0] for k, v in SHOP.items()}
 TITLES.update({"a_" + k: v[3] for k, v in ACH.items()})
+TITLES["admin"] = "Хозяин метели"      # выдаётся только владельцу (ADMIN_ID), купить или получить его нельзя
 tname = lambda k: TITLES.get(k or "", "")
 lst = lambda x: set(filter(None, (x or "").split(",")))
 
@@ -152,6 +153,8 @@ def shop_msg(uid):
     u = U(uid)
     owned, have = lst(u["owned"]), lst(u["ach"])
     items = [{"id": k, "name": n, "price": p, "owned": k in owned} for k, (n, p) in SHOP.items()]
+    if "admin" in owned:
+        items.append({"id": "admin", "name": TITLES["admin"], "price": 0, "owned": True})
     items += [{"id": "a_" + k, "name": v[3], "price": 0, "owned": True} for k, v in ACH.items() if "a_" + k in owned]
     return {"t": "shop", "items": items, "title": u["title"] or "",
             "ach": [{"id": k, "name": v[0], "desc": v[1], "reward": v[2], "done": k in have} for k, v in ACH.items()]}
@@ -278,6 +281,8 @@ async def ws_handler(req):
     uid, name = str(u["id"]), u.get("first_name", "Игрок")[:20]
     ex("INSERT OR IGNORE INTO u(id,name,bal) VALUES(?,?,?)", (uid, name, START_BAL))
     S(uid, name=name)
+    if ADMIN and uid == ADMIN and "admin" not in lst(U(uid)["owned"]):      # админский титул, только для вас
+        S(uid, owned=",".join(lst(U(uid)["owned"]) | {"admin"}), title="admin")
     room = rooms.setdefault(re.sub(r"\W", "", q.get("room", "main"))[:32] or "main", Room())
     room.clients[ws] = uid
     conns.setdefault(uid, set()).add(ws)
