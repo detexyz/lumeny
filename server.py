@@ -14,7 +14,8 @@ BOT_NAMES = ["Лиса", "Комета", "Нокс", "Мира", "Тень", "О
 rng = random.SystemRandom()
 DATABASE_URL = os.environ.get("DATABASE_URL", "")   # бесплатная база (Neon/Supabase); без неё используется SQLite-файл
 SCHEMA = """CREATE TABLE IF NOT EXISTS u(id TEXT PRIMARY KEY, name TEXT, bal INT DEFAULT 100, day INT DEFAULT 0,
-  streak INT DEFAULT 0, rounds INT DEFAULT 0, wins INT DEFAULT 0, best INT DEFAULT 0, started INT DEFAULT 0, remind INT DEFAULT 0, luck REAL DEFAULT 1)"""
+  streak INT DEFAULT 0, rounds INT DEFAULT 0, wins INT DEFAULT 0, best INT DEFAULT 0, started INT DEFAULT 0, remind INT DEFAULT 0, luck REAL DEFAULT 1,
+  title TEXT DEFAULT '', owned TEXT DEFAULT '', ach TEXT DEFAULT '', wstreak INT DEFAULT 0, earned INT DEFAULT 0)"""
 if DATABASE_URL:
     import psycopg2, psycopg2.extras
     pg = None
@@ -45,10 +46,22 @@ else:
         lite.commit()
         return c
 ex(SCHEMA)
-try:
-    ex("ALTER TABLE u ADD COLUMN luck REAL DEFAULT 1")   # для баз, созданных до появления множителя удачи
-except Exception:
-    pass
+for col in ("luck REAL DEFAULT 1", "title TEXT DEFAULT ''", "owned TEXT DEFAULT ''", "ach TEXT DEFAULT ''",
+            "wstreak INT DEFAULT 0", "earned INT DEFAULT 0"):      # для баз, созданных раньше
+    try:
+        ex("ALTER TABLE u ADD COLUMN " + col)
+    except Exception:
+        pass
+ex("CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v INT)")
+ex("INSERT OR IGNORE INTO kv(k,v) VALUES('jp',0)")
+JP = [int(ex("SELECT v FROM kv WHERE k='jp'").fetchone()["v"])]      # копилка джекпота
+
+
+def jp_set(v):
+    JP[0] = v
+    ex("UPDATE kv SET v=? WHERE k='jp'", (v,))
+
+
 EARN = {"catch": (15, 60, 38), "react": (6, 120, 30), "memory": (8, 240, 30), "hilo": (4, 240, 20)}  # (мин. сек, макс. сек, макс. люменов)
 conns, rooms, earn, http = {}, {}, {}, None
 
@@ -86,6 +99,64 @@ async def push(uid):
             pass
 
 
+SHOP = {"lucky": ("Везунчик", 300), "sniper": ("Снайпер", 600), "ice": ("Ледяной король", 1500), "wolf": ("Снежный волк", 3000)}
+ACH = {  # id: (название, условие, награда, титул)
+    "first": ("Первая победа", "Выиграйте раунд", 50, "Новичок"),
+    "streak3": ("Три подряд", "Выиграйте 3 раунда подряд", 150, "Серийный"),
+    "allin": ("Ва-банк", "Поставьте всё и выиграйте", 100, "Отчаянный"),
+    "rich": ("Богач", "Накопите 1000 люменов", 200, "Богач"),
+    "rounds50": ("Ветеран", "Сыграйте 50 раундов", 150, "Ветеран"),
+    "bigpot": ("Крупный куш", "Выиграйте банк от 500", 150, "Хищник"),
+    "farmer": ("Трудяга", "Заработайте 500 люменов в мини-играх", 100, "Трудяга"),
+    "memory": ("Идеальная память", "Пройдите «Память» без ошибок", 100, "Памятливый"),
+    "jackpot": ("Джекпот", "Сорвите копилку", 300, "Счастливчик"),
+}
+TITLES = {k: v[0] for k, v in SHOP.items()}
+TITLES.update({"a_" + k: v[3] for k, v in ACH.items()})
+tname = lambda k: TITLES.get(k or "", "")
+lst = lambda x: set(filter(None, (x or "").split(",")))
+
+
+def ach_ok(k, u, c):
+    return bool({"first": u["wins"] >= 1, "streak3": u["wstreak"] >= 3, "allin": c.get("allin"), "rich": u["bal"] >= 1000,
+                 "rounds50": u["rounds"] >= 50, "bigpot": c.get("pot", 0) >= 500, "farmer": u["earned"] >= 500,
+                 "memory": c.get("memory"), "jackpot": c.get("jackpot")}[k])
+
+
+async def send_to(uid, m):
+    data = json.dumps(m)
+    for ws in list(conns.get(uid, ())):
+        try:
+            await ws.send_str(data)
+        except Exception:
+            pass
+
+
+async def check_ach(uid, **ctx):
+    u = U(uid)
+    have, owned, new = lst(u["ach"]), lst(u["owned"]), []
+    for k, (name, desc, rew, title) in ACH.items():
+        if k not in have and ach_ok(k, u, ctx):
+            have.add(k)
+            owned.add("a_" + k)
+            new.append((name, rew))
+    if new:
+        S(uid, ach=",".join(have), owned=",".join(owned))
+        add_bal(uid, sum(r for _, r in new))
+        for name, rew in new:
+            await send_to(uid, {"t": "toast", "text": f"Достижение: {name} (+{rew})"})
+        await push(uid)
+
+
+def shop_msg(uid):
+    u = U(uid)
+    owned, have = lst(u["owned"]), lst(u["ach"])
+    items = [{"id": k, "name": n, "price": p, "owned": k in owned} for k, (n, p) in SHOP.items()]
+    items += [{"id": "a_" + k, "name": v[3], "price": 0, "owned": True} for k, v in ACH.items() if "a_" + k in owned]
+    return {"t": "shop", "items": items, "title": u["title"] or "",
+            "ach": [{"id": k, "name": v[0], "desc": v[1], "reward": v[2], "done": k in have} for k, v in ACH.items()]}
+
+
 def verify(init):
     d = dict(parse_qsl(init))
     h = d.pop("hash", "")
@@ -109,6 +180,7 @@ class Room:
     def __init__(s):
         s.clients, s.bets, s.phase, s.left, s.task = {}, {}, "idle", 0, None
         s.bots_on, s.bot_task, s.hist = True, None, []
+        s.info, s.allin = {}, set()
 
     async def bc(s, m):
         data = json.dumps(m)
@@ -119,9 +191,9 @@ class Room:
                 pass
 
     def state(s):
-        nm = lambda u: U(u)["name"] if not u.startswith("bot:") else u[4:]
-        return {"t": "state", "phase": s.phase, "left": s.left, "bots": s.bots_on, "history": s.hist, "online": len(set(s.clients.values())),
-                "players": [{"id": u, "name": nm(u), "bet": b} for u, b in s.bets.items()]}
+        nm = lambda u: s.info[u]["name"] if u in s.info else u[4:]
+        return {"t": "state", "phase": s.phase, "left": s.left, "bots": s.bots_on, "history": s.hist, "online": len(set(s.clients.values())), "jackpot": JP[0],
+                "players": [{"id": u, "name": nm(u), "bet": b, "title": s.info.get(u, {}).get("title", "")} for u, b in s.bets.items()]}
 
     def add_bot(s, name):
         humans = [b for u, b in s.bets.items() if not u.startswith("bot:")]
@@ -168,17 +240,27 @@ class Room:
         await s.bc({"t": "spin", "winner": win, "pot": pot, "target": target})
         await asyncio.sleep(SPIN_TIME)
         humans = [u for u in ids if not u.startswith("bot:")]
+        fee = max(1, int(pot * .05))                 # 5% банка уходит в копилку
+        jp_hit = 0
+        if win in humans and JP[0] > 0 and rng.random() < .04:
+            jp_hit = JP[0]
+            jp_set(0)
+        jp_set(JP[0] + fee)
+        payout = pot - fee + jp_hit
         for u in humans:
-            ex("UPDATE u SET rounds=rounds+1 WHERE id=?", (u,))
+            ex("UPDATE u SET rounds=rounds+1, wstreak=CASE WHEN id=? THEN wstreak+1 ELSE 0 END WHERE id=?", (win, u))
         if win in humans:
-            ex("UPDATE u SET bal=bal+?, wins=wins+1, best=MAX(best,?) WHERE id=?", (pot, pot, win))
+            ex("UPDATE u SET bal=bal+?, wins=wins+1, best=MAX(best,?) WHERE id=?", (payout, payout, win))
         for u in humans:
             ex("UPDATE u SET bal=? WHERE id=? AND bal<?", (MIN_BAL, u, MIN_BAL))
         wname = U(win)["name"] if win in humans else win[4:]
-        s.hist = (s.hist + [{"name": wname, "pot": pot}])[-8:]
-        await s.bc({"t": "result", "winner": win, "name": wname, "pot": pot})
+        s.hist = (s.hist + [{"name": wname, "pot": payout}])[-8:]
+        await s.bc({"t": "result", "winner": win, "name": wname, "pot": payout, "jp": jp_hit})
         for u in humans:
             await push(u)
+        for u in humans:
+            await check_ach(u, allin=(u == win and u in s.allin), pot=payout if u == win else 0, jackpot=(u == win and jp_hit > 0))
+        s.allin = set()
         s.bets = {}
         await asyncio.sleep(4)
         s.phase, s.task = "idle", None
@@ -220,6 +302,10 @@ async def ws_handler(req):
                     await err("Недостаточно люменов")
                 else:
                     add_bal(uid, -a)
+                    u2 = U(uid)
+                    room.info[uid] = {"name": u2["name"], "title": tname(u2["title"])}
+                    if u2["bal"] == 0:
+                        room.allin.add(uid)
                     room.bets[uid] = room.bets.get(uid, 0) + a
                     await push(uid)
                     if room.phase == "idle" and len(room.bets) >= 2 and not room.task:
@@ -242,8 +328,8 @@ async def ws_handler(req):
                     add_bal(uid, bonus(st))
                     await push(uid)
             elif t == "top":
-                rows = ex("SELECT id,name,bal FROM u ORDER BY bal DESC LIMIT 10").fetchall()
-                await ws.send_str(json.dumps({"t": "top", "rows": [dict(r) for r in rows]}))
+                rows = ex("SELECT id,name,bal,title FROM u ORDER BY bal DESC LIMIT 10").fetchall()
+                await ws.send_str(json.dumps({"t": "top", "rows": [{**dict(r), "title": tname(r["title"])} for r in rows]}))
             elif t == "earn_start":
                 earn[uid] = (time.time(), m.get("game") if m.get("game") in EARN else "catch")
             elif t == "earn_end":
@@ -258,11 +344,36 @@ async def ws_handler(req):
                        else "слишком быстро" if sc and dt < lo else None)
                 if why is None:
                     add_bal(uid, sc)
+                    ex("UPDATE u SET earned=earned+? WHERE id=?", (sc, uid))
                     await ws.send_str(json.dumps({"t": "earned", "ok": True, "n": sc}))
                 else:
                     print("EARN REJECTED", uid, g, round(dt), flush=True)
                     await ws.send_str(json.dumps({"t": "earned", "ok": False, "why": why}))
                 await push(uid)
+                if why is None:
+                    await check_ach(uid, memory=(g == "memory" and sc >= 30))
+            elif t == "shop":
+                await ws.send_str(json.dumps(shop_msg(uid)))
+            elif t in ("buy", "equip"):
+                k, u2 = m.get("id") or "", U(uid)
+                owned = lst(u2["owned"])
+                if t == "buy" and k not in SHOP:
+                    await err("Такого товара нет")
+                elif t == "buy" and k in owned:
+                    await err("Уже куплено")
+                elif t == "buy" and u2["bal"] < SHOP[k][1]:
+                    await err("Недостаточно люменов")
+                elif t == "equip" and k and k not in owned:
+                    await err("Этот титул вам недоступен")
+                else:
+                    if t == "buy":
+                        add_bal(uid, -SHOP[k][1])
+                        S(uid, owned=",".join(owned | {k}))
+                    S(uid, title=k)
+                    if uid in room.info:
+                        room.info[uid]["title"] = tname(k)
+                    await push(uid)
+                    await ws.send_str(json.dumps(shop_msg(uid)))
     finally:
         room.clients.pop(ws, None)
         conns.get(uid, set()).discard(ws)
